@@ -1,84 +1,89 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+#!/usr/bin/env python3
+import asyncio
+import time
 import json
-import os
+import sqlite3
+import traceback
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from playwright.async_api import async_playwright
+
+import avto
+import njuskalo
+import updates
+
+DB_FILE = "database.db"
+UPDATE_INTERVAL = 60 
+SLEEP_IDLE = 5.0 
+SLEEP_ACTIVE = 0.5 
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS cars (id TEXT PRIMARY KEY, link TEXT, name TEXT, image TEXT, price REAL, year INTEGER, mileage INTEGER, email_sent INTEGER DEFAULT 0, reason TEXT)""")
+    cur.execute("CREATE TABLE IF NOT EXISTS car_specs (id TEXT, spec_key TEXT, spec_value TEXT)")
+    cur.execute("""CREATE TABLE IF NOT EXISTS njuskalo_cars (id TEXT PRIMARY KEY, link TEXT, name TEXT, image TEXT, price TEXT, year INTEGER, mileage INTEGER, location TEXT, date_published TEXT, email_sent INTEGER DEFAULT 0, reason TEXT)""")
+    conn.commit()
+    return conn
 
 def load_settings():
-    path = os.path.join("settings", "email.json")
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print(f"Settings file not found: {path}")
-        return {}
-    except json.JSONDecodeError:
-        print(f"Invalid JSON in settings file: {path}")
-        return {}
-
-def send_email(subject, body):
-    """
-    Sends an email with the given subject and body, using settings loaded from settings.json.
-    """
+        with open("settings/avto.json", "r") as f: avto_c = json.load(f).get("car_criteria", [])
+    except: avto_c = []
     try:
-        settings = load_settings()
-        email_sender = settings.get("email_sender", "")
-        email_password = settings.get("email_password", "")
-        email_recipients = settings.get("email_recipients", [])
-        
-        if not email_sender or not email_password or not email_recipients:
-            print("❌ Email settings are incomplete or missing.")
-            return False
+        with open("settings/njuskalo.json", "r") as f: njus_c = json.load(f).get("car_criteria", {})
+    except: njus_c = {}
+    return avto_c, njus_c
 
-        # Create message
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = email_sender
-        # Handle list or string
-        if isinstance(email_recipients, list):
-            msg["To"] = ", ".join(email_recipients)
-        else:
-            msg["To"] = email_recipients
-
-        html_part = MIMEText(body, "html")
-        msg.attach(html_part)
-
-        # Send the email
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(email_sender, email_password)
-            server.send_message(msg)
-            
-        print(f"📧 Email sent: {subject}")
-        return True
-    except Exception as e:
-        print(f"❌ Error sending email: {e}")
-        return False
-
-# THIS IS THE CRITICAL FUNCTION THAT WAS MISSING
-def send_email_sync(subject, body):
-    """Wrapper to safely call send_email from scraper threads"""
-    return send_email(subject, body)
-
-def format_car_email(car, reason):
-    """Helper to format email body"""
-    try:
-        with open("Template.html", "r", encoding="utf-8") as f:
-            template = f.read()
-    except:
-        template = "<h2>Car Match: {car_name}</h2><p>Reason: {match_reason}</p><a href='{car_link}'>Link</a>"
-
-    car_image_html = f'<img src="{car.get("image")}" style="max-width:300px;">' if car.get("image") else ""
+async def run_browser_session():
+    conn = init_db()
+    executor = ThreadPoolExecutor(max_workers=3)
     
-    specs_html = f"<tr><td>Price</td><td>{car.get('price', 'N/A')}</td></tr>"
-    specs_html += f"<tr><td>Year</td><td>{car.get('year', 'N/A')}</td></tr>"
-    specs_html += f"<tr><td>Mileage</td><td>{car.get('mileage', 'N/A')}</td></tr>"
+    print("🚀 Launching High-Performance Browser...")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--disable-extensions", "--blink-settings=imagesEnabled=false"])
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
+        await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font"] else route.continue_())
 
-    return template.format(
-        car_name=car.get("name", "Unknown"),
-        car_price=car.get("price", "N/A"),
-        car_image_html=car_image_html,
-        car_specs_html=specs_html,
-        car_link=car.get("link", "#"),
-        match_reason=reason
-    )
+        page_avto = await context.new_page()
+        page_njus = await context.new_page()
+        
+        print("✅ Browser Ready.")
+        avto_crit, njus_crit = load_settings()
+        last_update = 0
+        
+        while True:
+            if time.time() - last_update > UPDATE_INTERVAL:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(executor, updates.sync_data)
+                avto_crit, njus_crit = load_settings()
+                last_update = time.time()
+
+            results = await asyncio.gather(
+                avto.scrape_routine(page_avto, conn, avto_crit),
+                njuskalo.scrape_routine(page_njus, conn, njus_crit),
+                return_exceptions=True
+            )
+            
+            new_avto = results[0] if isinstance(results[0], int) else 0
+            new_njus = results[1] if isinstance(results[1], int) else 0
+            
+            if new_avto + new_njus > 0:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ Cycle: {new_avto} Avto, {new_njus} Njuskalo")
+                await asyncio.sleep(SLEEP_ACTIVE)
+            else:
+                await asyncio.sleep(SLEEP_IDLE)
+
+async def main():
+    while True:
+        try:
+            await run_browser_session()
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            print(f"💥 Browser Crash: {e}. Restarting...")
+            await asyncio.sleep(5)
+
+if __name__ == "__main__":
+    asyncio.run(main())

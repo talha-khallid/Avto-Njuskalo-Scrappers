@@ -18,7 +18,7 @@ def load_settings():
 
 def send_email(subject, body):
     """
-    Sends an email with the given subject and body.
+    Sends an email with the given subject and body, using settings loaded from settings.json.
     """
     try:
         settings = load_settings()
@@ -30,10 +30,11 @@ def send_email(subject, body):
             print("❌ Email settings are incomplete or missing.")
             return False
 
+        # Create message
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = email_sender
-        # Handle list or string for recipients
+        # Handle list or string
         if isinstance(email_recipients, list):
             msg["To"] = ", ".join(email_recipients)
         else:
@@ -42,6 +43,7 @@ def send_email(subject, body):
         html_part = MIMEText(body, "html")
         msg.attach(html_part)
 
+        # Send the email
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
             server.starttls()
             server.login(email_sender, email_password)
@@ -53,15 +55,13 @@ def send_email(subject, body):
         print(f"❌ Error sending email: {e}")
         return False
 
+# THIS IS THE CRITICAL FUNCTION THAT WAS MISSING
 def send_email_sync(subject, body):
-    """
-    Wrapper function for calling from threads/async loops safely.
-    This fixes the 'module has no attribute' error.
-    """
+    """Wrapper to safely call send_email from scraper threads"""
     return send_email(subject, body)
 
 def format_car_email(car, reason):
-    """Helper to format email body (shared by both scrapers)"""
+    """Helper to format email body"""
     try:
         with open("Template.html", "r", encoding="utf-8") as f:
             template = f.read()
@@ -70,7 +70,6 @@ def format_car_email(car, reason):
 
     car_image_html = f'<img src="{car.get("image")}" style="max-width:300px;">' if car.get("image") else ""
     
-    # Simple table rows for specs
     specs_html = f"<tr><td>Price</td><td>{car.get('price', 'N/A')}</td></tr>"
     specs_html += f"<tr><td>Year</td><td>{car.get('year', 'N/A')}</td></tr>"
     specs_html += f"<tr><td>Mileage</td><td>{car.get('mileage', 'N/A')}</td></tr>"
