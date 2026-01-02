@@ -2,7 +2,6 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import re
 import mail
-import json
 import asyncio
 
 URL = "https://www.njuskalo.hr/auti/toyota"
@@ -13,18 +12,17 @@ async def scrape_routine(page, conn, criteria):
         html = await page.content()
         soup = BeautifulSoup(html, "html.parser")
 
-        # Container Finder (Matches your strategy)
         main = soup.select_one('section.EntityList--Regular ul.EntityList-items') or \
                soup.select_one('ul.EntityList-items')
         
         if not main: return 0
 
         listings = main.select('li')
-        new_count = 0
+        new_items_count = 0
         cur = conn.cursor()
 
         for li in listings:
-            # Skip VauVau
+            # Filter Logic
             cls = li.get('class', [])
             if 'EntityList-item--VauVau' in cls: continue
             if 'EntityList-item--Regular' not in cls: continue
@@ -32,28 +30,40 @@ async def scrape_routine(page, conn, criteria):
             car = parse_car_listing(li, URL)
             if not car or not car.get('id'): continue
 
-            cur.execute("SELECT 1 FROM njuskalo_cars WHERE id=?", (car["id"],))
-            if cur.fetchone(): continue
-
-            new_count += 1
-            match, reason = check_car_against_criteria(car, criteria)
-            email_sent = 0
-
-            if match:
-                print(f"🔥 Njuskalo Match: {car['name']}")
-                if mail.send_email_sync(f"Njuskalo Match: {car['name']}", mail.format_car_email(car, reason)):
-                    email_sent = 1
+            # DB Check
+            cur.execute("SELECT email_sent FROM njuskalo_cars WHERE id=?", (car["id"],))
+            existing = cur.fetchone()
             
-            insert_car_with_status(conn, car, email_sent, reason)
+            is_new = existing is None
+            already_emailed = existing[0] if existing else 0
 
-        if new_count > 0: conn.commit()
-        return new_count
+            # --- DEBUG PRINT (Only for NEW cars) ---
+            if is_new:
+                 print(f"➕ Found New (Njuskalo): {car.get('name')} | Year: {car.get('year')} | Price: {car.get('price')}")
+                 new_items_count += 1
+
+            match, reason = check_car_against_criteria(car, criteria)
+            should_send_email = 0
+
+            if match and (is_new or already_emailed == 0):
+                print(f"🔔 MATCH Njuskalo: {car['name']} ({reason})")
+                if mail.send_email_sync(f"Njuskalo Match: {car['name']}", mail.format_car_email(car, reason)):
+                    should_send_email = 1
+            elif already_emailed == 1:
+                should_send_email = 1
+
+            # ALWAYS Save/Update
+            insert_car_with_status(conn, car, should_send_email, reason)
+
+        if new_items_count > 0:
+            conn.commit()
+        return new_items_count
 
     except Exception as e:
         print(f"⚠️ Njuskalo Error: {e}")
         return 0
 
-# --- Helper Logic (Exact match to your script) ---
+# --- Helper Logic ---
 
 def clean_text(text):
     if not text: return ""
@@ -63,90 +73,61 @@ def clean_text(text):
 def parse_car_listing(li, base_url):
     try:
         data = {'specs': {}}
-        
-        # ID from data-options
         opts = li.get('data-options', '')
         id_m = re.search(r'"id"\s*:\s*(\d+)', opts.replace('&quot;', '"'))
         data['id'] = id_m.group(1) if id_m else None
 
-        # Title/Link
         title_el = li.select_one('.entity-title a')
         if title_el:
             data['name'] = clean_text(title_el.text)
             data['link'] = urljoin(base_url, title_el.get('href', ''))
-            # ID Fallback
             if not data['id'] and 'oglas-' in data['link']:
                 data['id'] = data['link'].split('oglas-')[-1]
 
-        # Price
         price_el = li.select_one('.entity-prices .price--hrk')
         data['price'] = clean_text(price_el.text) if price_el else None
 
-        # Image
         img = li.select_one('.entity-thumbnail img')
         if img:
             src = img.get('src') or img.get('data-src')
             data['image'] = urljoin(base_url, src) if src else None
 
-        # Description parsing (Your exact logic)
         desc_el = li.select_one('.entity-description-main')
         year, mileage, loc, date = None, None, None, None
         
         if desc_el:
             txt = clean_text(desc_el.get_text())
-            full_html = str(desc_el)
-
+            
             # Mileage
             km = re.search(r'\b(\d{1,3}(?:[.,]\d{3})*)\s*km\b', txt, re.I)
-            if km: 
-                mileage = int(km.group(1).replace('.', '').replace(',', ''))
-                data['specs']['Kilometers'] = f"{km.group(1)} km"
+            if km: mileage = int(km.group(1).replace('.', '').replace(',', ''))
             
             # Year
-            yr = re.search(r'Godište automobila:\s*(\d{4})|Car year:\s*(\d{4})|Godina vozila:\s*(\d{4})', txt)
-            if yr: year = yr.group(1) or yr.group(2) or yr.group(3)
+            yr = re.search(r'Godište.*?(\d{4})|(\d{4}).*?Godište', txt)
+            if yr: year = yr.group(1) or yr.group(2)
             else:
                 yr_simple = re.search(r'\b(19\d\d|20\d\d)\b', txt)
                 if yr_simple: year = yr_simple.group(1)
 
-            if year: data['specs']['Year'] = year
-
             # Location
-            loc_m = re.search(r'Lokacija vozila:\s*([^<\n\r]+)|Vehicle location:\s*([^<\n\r]+)', txt)
+            loc_m = re.search(r'Lokacija vozila:\s*([^<\n\r]+)', txt)
             if loc_m: 
-                loc = (loc_m.group(1) or loc_m.group(2)).strip()
-                loc = re.sub(r'\s*Financing.*$|Financiranje.*$', '', loc)
-                data['specs']['Location'] = loc
+                loc = re.sub(r'\s*Financ.*$', '', loc_m.group(1)).strip()
 
-            # Financing
-            fin = re.search(r'Financiranje već od\s*([0-9.,]+)\s*€', txt)
-            if fin: data['specs']['Financing'] = f"Financing from €{fin.group(1)}"
-
-        # Year from Title fallback
-        if not year and data.get('name'):
-            ym = re.search(r'\b(19\d\d|20\d\d)\b', data['name'])
-            if ym: year = ym.group(1)
-
-        # Pub Date
         date_el = li.select_one('.entity-pub-date time')
-        if date_el: 
-            date = clean_text(date_el.text)
-            data['specs']['Published'] = date
+        if date_el: date = clean_text(date_el.text)
 
         data.update({'year': year, 'mileage': mileage, 'location': loc, 'date_published': date})
         return data
     except: return None
 
 def check_car_against_criteria(car, criteria):
-    # Price
+    # Quick Criteria Check
     price_val = None
     if car.get("price"):
-        try: 
-            clean = re.sub(r'[^\d,.]', '', car["price"]).replace(',', '').replace('.', '')
-            price_val = int(clean)
+        try: price_val = int(re.sub(r'[^\d]', '', car["price"]))
         except: pass
 
-    # Year
     if car.get("year"):
         try:
             y = int(car["year"])
@@ -154,18 +135,10 @@ def check_car_against_criteria(car, criteria):
             if criteria.get("max_year") and y > criteria.get("max_year"): return False, "New"
         except: pass
 
-    # Mileage
-    if car.get("mileage"):
-        try:
-            m = int(car["mileage"])
-            if criteria.get("max_mileage") and m > criteria.get("max_mileage"): return False, "High Miles"
-        except: pass
-
-    # Price Check
     if price_val and criteria.get("max_price") and price_val > criteria.get("max_price"):
         return False, "Expensive"
 
-    return True, "match"
+    return True, "Match"
 
 def insert_car_with_status(conn, car, email_sent, reason):
     cur = conn.cursor()
