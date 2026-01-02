@@ -30,21 +30,23 @@ async def scrape_routine(page, conn, criteria):
             car = parse_car_listing(li, URL)
             if not car or not car.get('id'): continue
 
-            # DB Check
+            # 1. Check if NEW (for debug/email)
             cur.execute("SELECT email_sent FROM njuskalo_cars WHERE id=?", (car["id"],))
             existing = cur.fetchone()
             
             is_new = existing is None
             already_emailed = existing[0] if existing else 0
 
-            # --- DEBUG PRINT (Only for NEW cars) ---
+            # 2. DEBUG PRINT (Only for NEW cars)
             if is_new:
-                 print(f"➕ Found New (Njuskalo): {car.get('name')} | Year: {car.get('year')} | Price: {car.get('price')}")
+                 print(f"➕ Found New Njuskalo: {car.get('name')} | Year: {car.get('year')} | Price: {car.get('price')}")
                  new_items_count += 1
 
+            # 3. Check Criteria
             match, reason = check_car_against_criteria(car, criteria)
             should_send_email = 0
 
+            # 4. Email Logic
             if match and (is_new or already_emailed == 0):
                 print(f"🔔 MATCH Njuskalo: {car['name']} ({reason})")
                 if mail.send_email_sync(f"Njuskalo Match: {car['name']}", mail.format_car_email(car, reason)):
@@ -52,7 +54,7 @@ async def scrape_routine(page, conn, criteria):
             elif already_emailed == 1:
                 should_send_email = 1
 
-            # ALWAYS Save/Update
+            # 5. ALWAYS SAVE
             insert_car_with_status(conn, car, should_send_email, reason)
 
         if new_items_count > 0:

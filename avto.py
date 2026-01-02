@@ -8,13 +8,15 @@ URL = "https://www.avto.net/Ads/results_100.asp?oglasrubrika=1&prodajalec=2"
 
 async def scrape_routine(page, conn, criteria):
     try:
-        # Fast load
+        # Fast load - wait for DOM only
         await page.goto(URL, wait_until="domcontentloaded", timeout=30000)
+        
         html = await page.content()
         soup = BeautifulSoup(html, "html.parser")
 
         form = soup.find("form", {"id": "results"})
-        if not form: return 0
+        if not form:
+            return 0
 
         rows = form.select("div.GO-Results-Row")
         new_items_count = 0
@@ -22,33 +24,37 @@ async def scrape_routine(page, conn, criteria):
 
         for row in rows:
             car = parse_car_row(row, URL)
-            if not car or not car.get("id"): continue
+            
+            # Skip invalid rows
+            if not car or not car.get("id"): 
+                continue
 
-            # Check if car exists to decide if we print/email
+            # 1. Check if this is a NEW car (for debug printing & email decision)
             cur.execute("SELECT email_sent FROM cars WHERE id=?", (car["id"],))
             existing = cur.fetchone()
             
             is_new = existing is None
             already_emailed = existing[0] if existing else 0
-            
-            # --- DEBUG PRINT (Only for NEW cars) ---
+
+            # 2. DEBUG PRINT (Only for NEW cars, as requested)
             if is_new:
-                print(f"➕ Found New: {car.get('name')} | Year: {car.get('year')} | Mileage: {car.get('mileage')} | Price: {car.get('price')}")
+                print(f"➕ Found New Avto: {car.get('name')} | Year: {car.get('year')} | Mileage: {car.get('mileage')} | Price: {car.get('price')}")
                 new_items_count += 1
-            
-            # Check Criteria
+
+            # 3. Check Criteria
             match, reason = check_car_against_criteria(car, criteria)
             should_send_email = 0
 
-            # Logic: If matches AND (it's new OR we haven't emailed about it yet)
+            # 4. Email Logic
+            # Send if it matches AND (it's completely new OR we haven't sent an email for it yet)
             if match and (is_new or already_emailed == 0):
                 print(f"🔔 MATCH Avto: {car['name']} ({reason})")
                 if mail.send_email_sync(f"Avto Match: {car['name']}", mail.format_car_email(car, reason)):
                     should_send_email = 1
             elif already_emailed == 1:
-                should_send_email = 1 # Keep status as sent
+                should_send_email = 1 # Preserve 'sent' status
 
-            # ALWAYS Save/Update DB (Insert or Replace)
+            # 5. ALWAYS SAVE TO DB (Update price, view count, etc.)
             insert_car_with_status(conn, car, should_send_email, reason)
         
         if new_items_count > 0:
@@ -78,11 +84,11 @@ def parse_car_row(row, base_url):
         img_el = row.select_one(".GO-Results-Photo img")
         image = urljoin(base_url, img_el["src"]) if img_el else None
 
-        # Price (Loop to find valid number)
+        # Price (Loop to find valid number across mobile/desktop views)
         price = None
         for p_el in row.select(".GO-Results-Price-TXT-Regular"):
             txt = p_el.get_text(strip=True)
-            # Remove dots, € sign
+            # Remove dots, € sign, spaces
             clean = re.sub(r'[^\d]', '', txt) 
             if clean:
                 price = float(clean)
@@ -148,8 +154,13 @@ def check_car_against_criteria(car, criteria_list):
 
 def insert_car_with_status(conn, car, email_sent, reason):
     cur = conn.cursor()
-    # Always update so we capture price changes
+    # Always INSERT OR REPLACE to update data even if ID exists
     cur.execute("""
     INSERT OR REPLACE INTO cars (id, link, name, image, price, year, mileage, email_sent, reason)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (car["id"], car["link"], car["name"], car["image"], car["price"], car["year"], car["mileage"], email_sent, reason))
+    
+    # Update specs
+    cur.execute("DELETE FROM car_specs WHERE id=?", (car["id"],))
+    for k, v in car.get("specs", {}).items():
+        cur.execute("INSERT INTO car_specs VALUES (?,?,?)", (car["id"], k, str(v)))
