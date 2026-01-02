@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Car Match Found</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }}
+        .header {{
+            background-color: #4CAF50;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            border-radius: 5px 5px 0 0;
+        }}
+        .content {{
+            background-color: #f9f9f9;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 0 0 5px 5px;
+        }}
+        .car-info {{
+            background-color: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border-left: 4px solid #4CAF50;
+        }}
+        .car-image {{
+            max-width: 100%;
+            height: auto;
+            border-radius: 5px;
+            margin: 10px 0;
+        }}
+        .specs-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }}
+        .specs-table th, .specs-table td {{
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }}
+        .specs-table th {{
+            background-color: #f2f2f2;
+        }}
+        .link-button {{
+            display: inline-block;
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 10px 0;
+        }}
+        .link-button:hover {{
+            background-color: #45a049;
+        }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚗 Car Match Found!</h1>
+        <p>A car matching your criteria has been found on Avto.net</p>
+    </div>
+    
+    <div class="content">
+        <div class="car-info">
+            <h2>{car_name}</h2>
+            <p><strong>Price:</strong> {car_price}</p>
+            
+            {car_image_html}
+            
+            <h3>Specifications:</h3>
+            <table class="specs-table">
+                <thead>
+                    <tr>
+                        <th>Specification</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {car_specs_html}
+                </tbody>
+            </table>
+            
+            <a href="{car_link}" class="link-button" target="_blank">View Car Details</a>
+        </div>
+    </div>
+</body>
+</html>

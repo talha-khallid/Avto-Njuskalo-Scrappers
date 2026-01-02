@@ -1,0 +1,8 @@
+{
+    "car_criteria": {
+        "min_year": null,
+        "max_year": 2015,
+        "max_mileage": null,
+        "max_price": null
+    }
+}

@@ -1,0 +1,70 @@
+{
+    "car_criteria": [
+        {
+            "name": "toyota",
+            "min_year": null,
+            "max_year": 2015,
+            "max_mileage": null
+        },
+        {
+            "name": "sprinter",
+            "min_year": null,
+            "max_year": 2000,
+            "max_mileage": null
+        },
+        {
+            "name": "C-Razred",
+            "min_year": null,
+            "max_year": 2000,
+            "max_mileage": null
+        },
+        {
+            "name": "mercedes-benz c razred",
+            "min_year": null,
+            "max_year": 2000,
+            "max_mileage": null
+        },
+        {
+            "name": "Nissan Navara",
+            "min_year": null,
+            "max_year": null,
+            "max_mileage": null
+        },
+        {
+            "name": "Mitsubishi l 200",
+            "min_year": null,
+            "max_year": null,
+            "max_mileage": null
+        },
+        {
+            "name": "renault kangoo",
+            "min_year": null,
+            "max_year": null,
+            "max_mileage": null
+        },
+        {
+            "name": "Volkswagen sharan",
+            "min_year": null,
+            "max_year": 2000,
+            "max_mileage": null
+        },
+        {
+            "name": "Peugeot 406",
+            "min_year": null,
+            "max_year": null,
+            "max_mileage": null
+        },
+        {
+            "name": "Mazda primacy",
+            "min_year": null,
+            "max_year": null,
+            "max_mileage": null
+        },
+        {
+            "name": "Nissan king cab",
+            "min_year": null,
+            "max_year": null,
+            "max_mileage": null
+        }
+    ]
+}
