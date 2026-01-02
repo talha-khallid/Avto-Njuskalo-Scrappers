@@ -7,7 +7,7 @@ import asyncio
 # The URL to scrape
 URL = "https://www.avto.net/Ads/results_100.asp?oglasrubrika=1&prodajalec=2"
 
-async def scrape_routine(page, conn, criteria):
+async def scrape_routine(page, conn, criteria):     
     """
     Async worker for Avto.net. 
     Receives an open page and db connection from main.py.
