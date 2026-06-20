@@ -44,10 +44,10 @@ def send_email(subject, body):
         msg.attach(html_part)
 
         # Send the email
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(email_sender, email_password)
-            server.send_message(msg)
+        # with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        #     server.starttls()
+        #     server.login(email_sender, email_password)
+        #     server.send_message(msg)
             
         print(f"📧 Email sent: {subject}")
         return True

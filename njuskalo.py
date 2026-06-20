@@ -4,15 +4,18 @@ import re
 import mail
 import asyncio
 import json
+import time
 
 # URL to scrape
 URL = "https://www.njuskalo.hr/auti/toyota"
 
 async def scrape_routine(page, conn, criteria):
     try:
-        # --- 1. AGGRESSIVE STEALTH SETUP ---
-        # We must override the User-Agent because the default 'HeadlessChrome' gets blocked immediately.
-        # This matches the User-Agent from your working old script.
+        # --- 1. STEALTH & NAVIGATION ---
+        # CACHE BUSTING: Add timestamp to URL to force fresh data
+        # Note: Njuskalo might have strict routing, but usually ?t=... is ignored safely
+        current_url = f"{URL}?_t={int(time.time())}"
+
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
         await page.set_extra_http_headers({
@@ -24,7 +27,6 @@ async def scrape_routine(page, conn, criteria):
 
         await page.set_viewport_size({"width": 1280, "height": 900})
 
-        # Inject the stealth JS to hide 'navigator.webdriver'
         await page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
@@ -32,42 +34,31 @@ async def scrape_routine(page, conn, criteria):
             window.chrome = { runtime: {} };
         """)
 
-        # --- 2. WARMUP NAVIGATION ---
-        # Going directly to the search URL often triggers the bot detector.
-        # We go to the homepage first to get valid session cookies.
-        print("🔄 Njuskalo: Warming up session (Homepage)...")
-        try:
-            await page.goto("https://www.njuskalo.hr/", timeout=15000, wait_until="domcontentloaded")
-            await asyncio.sleep(2) # Short pause to act human
-        except:
-            print("⚠️ Warmup timed out, proceeding to target...")
+        # WARMUP (Only if we aren't on the domain yet)
+        if "njuskalo" not in page.url:
+            print("🔄 Njuskalo: Warming up session (Homepage)...")
+            try:
+                await page.goto("https://www.njuskalo.hr/", timeout=15000, wait_until="domcontentloaded")
+                await asyncio.sleep(2)
+            except:
+                print("⚠️ Warmup timed out, proceeding to target...")
 
-        # --- 3. TARGET NAVIGATION ---
+        # TARGET NAVIGATION
         print(f"🔄 Njuskalo: Loading listings...")
-        await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+        await page.goto(current_url, wait_until="domcontentloaded", timeout=60000)
 
         # Check for Captcha
         title = await page.title()
         if "ShieldSquare" in title or "Captcha" in title:
-            print(f"⚠️ Njuskalo BLOCKED: ShieldSquare Captcha detected. (Attempting to parse anyway)")
+            print(f"⚠️ Njuskalo BLOCKED: Captcha detected.")
         
-        # --- 4. PARSING (Logic from your Old Script) ---
+        # --- 2. PARSING ---
         html = await page.content()
         soup = BeautifulSoup(html, "html.parser")
 
-        # Strategy 1: Find the specific "Regular ads" section
-        main_container = soup.select_one('section.EntityList--Regular.EntityList--ListItemRegularAd ul.EntityList-items')
-        
-        # Strategy 2: Find any ul.EntityList-items with listings
-        if not main_container:
-            for container in soup.select('ul.EntityList-items'):
-                if container.select('li'):
-                    main_container = container
-                    break
-        
-        if not main_container:
-            # Fallback for when the structure is flat (no UL)
-            main_container = soup.select_one('.EntityList-items')
+        main_container = soup.select_one('section.EntityList--Regular.EntityList--ListItemRegularAd ul.EntityList-items') or \
+                         soup.select_one('ul.EntityList-items') or \
+                         soup.select_one('.EntityList-items')
 
         if not main_container:
             print(f"⚠️ Njuskalo: Could not find main list. Page Title: {title}")
@@ -78,10 +69,8 @@ async def scrape_routine(page, conn, criteria):
         cur = conn.cursor()
 
         for li in listings:
-            # Filter Logic (VauVau check)
             if is_vauvau_listing(li): continue
 
-            # Parse
             car = parse_car_listing(li, URL)
             if not car or not car.get('id'): continue
 
@@ -118,7 +107,7 @@ async def scrape_routine(page, conn, criteria):
         print(f"⚠️ Njuskalo Error: {e}")
         return 0
 
-# --- EXACT HELPER FUNCTIONS FROM YOUR OLD SCRIPT ---
+# --- HELPERS ---
 
 def clean_text(text):
     if not text: return ""
@@ -145,9 +134,7 @@ def extract_id_from_url(url):
 def is_vauvau_listing(listing):
     try:
         class_attr = listing.get('class', [])
-        # Check string or list
         if isinstance(class_attr, str): class_attr = class_attr.split()
-        
         if 'EntityList-item--VauVau' in class_attr: return True
         if 'EntityList-item--Regular' not in class_attr: return True
         if listing.select('.VauVau-logo, .VauVau-icon, .EntityList-vauVauLabel'): return True
@@ -173,7 +160,7 @@ def parse_car_listing(listing, base_url):
                 car_data['link'] = url
                 if not car_id: car_data['id'] = extract_id_from_url(url)
         
-        # Price (Supports HRK and EUR)
+        # Price
         price_element = listing.select_one('.entity-prices .price--hrk') or listing.select_one('.price--eur') or listing.select_one('.price-item')
         if price_element:
             car_data['price'] = clean_text(price_element.text)
@@ -192,7 +179,7 @@ def parse_car_listing(listing, base_url):
         if date_element:
             car_data['date_published'] = clean_text(date_element.text)
 
-        # Specs (Year, Mileage)
+        # Specs
         description_element = listing.select_one('.entity-description-main')
         if description_element:
             full_description = clean_text(description_element.get_text())
@@ -203,9 +190,9 @@ def parse_car_listing(listing, base_url):
                 car_data['mileage'] = int(km_match.group(1).replace('.', '').replace(',', ''))
             
             # Year
-            year_match = re.search(r'Godište automobila:\s*(\d{4})|Car year:\s*(\d{4})|Godina vozila:\s*(\d{4})', full_description)
+            year_match = re.search(r'(?:Godište|Godina|Year).*?(\d{4})', full_description, re.I)
             if year_match:
-                car_data['year'] = year_match.group(1) or year_match.group(2) or year_match.group(3)
+                car_data['year'] = year_match.group(1)
             else:
                 year_match = re.search(r'\b(19\d\d|20\d\d)\b', full_description)
                 if year_match: car_data['year'] = year_match.group(1)
@@ -215,6 +202,11 @@ def parse_car_listing(listing, base_url):
             if location_match:
                 loc = (location_match.group(1) or location_match.group(2)).strip()
                 car_data['location'] = re.sub(r'\s*Financing.*$|Financiranje.*$', '', loc)
+                
+        # Fallback Year
+        if not car_data['year'] and car_data['name']:
+             year_match = re.search(r'\b(199\d|20[0-2]\d)\b', car_data['name'])
+             if year_match: car_data['year'] = year_match.group(1)
 
         return car_data
     except Exception as e:

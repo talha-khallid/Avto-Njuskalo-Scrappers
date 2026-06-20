@@ -3,20 +3,22 @@ from urllib.parse import urljoin, urlparse, parse_qs
 import re
 import mail
 import asyncio
+import time
 
 URL = "https://www.avto.net/Ads/results_100.asp?oglasrubrika=1&prodajalec=2"
 
 async def scrape_routine(page, conn, criteria):
     try:
-        # Fast load - wait for DOM only
-        await page.goto(URL, wait_until="domcontentloaded", timeout=30000)
+        # CACHE BUSTING: Add timestamp to URL to force fresh data
+        current_url = f"{URL}&_t={int(time.time())}"
         
+        # Fast load
+        await page.goto(current_url, wait_until="domcontentloaded", timeout=30000)
         html = await page.content()
         soup = BeautifulSoup(html, "html.parser")
 
         form = soup.find("form", {"id": "results"})
-        if not form:
-            return 0
+        if not form: return 0
 
         rows = form.select("div.GO-Results-Row")
         new_items_count = 0
@@ -24,37 +26,33 @@ async def scrape_routine(page, conn, criteria):
 
         for row in rows:
             car = parse_car_row(row, URL)
-            
-            # Skip invalid rows
-            if not car or not car.get("id"): 
-                continue
+            if not car or not car.get("id"): continue
 
-            # 1. Check if this is a NEW car (for debug printing & email decision)
+            # Check if car exists
             cur.execute("SELECT email_sent FROM cars WHERE id=?", (car["id"],))
             existing = cur.fetchone()
             
             is_new = existing is None
             already_emailed = existing[0] if existing else 0
-
-            # 2. DEBUG PRINT (Only for NEW cars, as requested)
+            
+            # --- DEBUG PRINT (Only for NEW cars) ---
             if is_new:
                 print(f"➕ Found New Avto: {car.get('name')} | Year: {car.get('year')} | Mileage: {car.get('mileage')} | Price: {car.get('price')}")
                 new_items_count += 1
-
-            # 3. Check Criteria
+            
+            # Check Criteria
             match, reason = check_car_against_criteria(car, criteria)
             should_send_email = 0
 
-            # 4. Email Logic
-            # Send if it matches AND (it's completely new OR we haven't sent an email for it yet)
+            # Email Logic
             if match and (is_new or already_emailed == 0):
                 print(f"🔔 MATCH Avto: {car['name']} ({reason})")
                 if mail.send_email_sync(f"Avto Match: {car['name']}", mail.format_car_email(car, reason)):
                     should_send_email = 1
             elif already_emailed == 1:
-                should_send_email = 1 # Preserve 'sent' status
+                should_send_email = 1
 
-            # 5. ALWAYS SAVE TO DB (Update price, view count, etc.)
+            # Save
             insert_car_with_status(conn, car, should_send_email, reason)
         
         if new_items_count > 0:
@@ -84,17 +82,16 @@ def parse_car_row(row, base_url):
         img_el = row.select_one(".GO-Results-Photo img")
         image = urljoin(base_url, img_el["src"]) if img_el else None
 
-        # Price (Loop to find valid number across mobile/desktop views)
+        # Price
         price = None
         for p_el in row.select(".GO-Results-Price-TXT-Regular"):
             txt = p_el.get_text(strip=True)
-            # Remove dots, € sign, spaces
             clean = re.sub(r'[^\d]', '', txt) 
             if clean:
                 price = float(clean)
                 break 
 
-        # Specs (Year, Mileage)
+        # Specs
         year, mileage = None, None
         table = row.select_one(".GO-Results-Data table")
         if table:
@@ -105,16 +102,12 @@ def parse_car_row(row, base_url):
                 key = tds[0].get_text(strip=True).lower()
                 val = tds[1].get_text(strip=True)
 
-                # Explicit check for "1.registracija" (Production Year)
                 if "1.registracija" in key:
-                    # Look for 4 digits (e.g. 2013)
                     ym = re.search(r'\b(19\d\d|20\d\d)\b', val)
                     if ym: year = int(ym.group(1))
                     elif val.strip().isdigit(): year = int(val.strip())
 
-                # Explicit check for "Prevoženih" (Mileage)
                 if "prevoženih" in key:
-                    # Remove 'km', spaces, dots
                     m_clean = re.sub(r'[^\d]', '', val)
                     if m_clean: mileage = int(m_clean)
 
@@ -134,7 +127,6 @@ def check_car_against_criteria(car, criteria_list):
         crit_name = crit.get("name", "").lower()
         if crit_name not in name: continue
         
-        # Year Check
         if year:
             try:
                 y = int(year)
@@ -142,7 +134,6 @@ def check_car_against_criteria(car, criteria_list):
                 if crit.get("max_year") and y > crit.get("max_year"): return False, f"New ({y})"
             except: pass
             
-        # Mileage Check
         if mileage:
             try:
                 m = int(mileage)
@@ -154,13 +145,7 @@ def check_car_against_criteria(car, criteria_list):
 
 def insert_car_with_status(conn, car, email_sent, reason):
     cur = conn.cursor()
-    # Always INSERT OR REPLACE to update data even if ID exists
     cur.execute("""
     INSERT OR REPLACE INTO cars (id, link, name, image, price, year, mileage, email_sent, reason)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (car["id"], car["link"], car["name"], car["image"], car["price"], car["year"], car["mileage"], email_sent, reason))
-    
-    # Update specs
-    cur.execute("DELETE FROM car_specs WHERE id=?", (car["id"],))
-    for k, v in car.get("specs", {}).items():
-        cur.execute("INSERT INTO car_specs VALUES (?,?,?)", (car["id"], k, str(v)))

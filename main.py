@@ -15,7 +15,7 @@ import updates
 DB_FILE = "database.db"
 UPDATE_INTERVAL = 60 
 SLEEP_IDLE = 5.0 
-SLEEP_ACTIVE = 0.5 
+SLEEP_ACTIVE = 1.0 # Changed to 1.0 to prevent choking the CPU/Browser
 
 def init_db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -54,12 +54,14 @@ async def run_browser_session():
         last_update = 0
         
         while True:
+            # 1. Background Updates
             if time.time() - last_update > UPDATE_INTERVAL:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(executor, updates.sync_data)
                 avto_crit, njus_crit = load_settings()
                 last_update = time.time()
 
+            # 2. Run Scrapers concurrently
             results = await asyncio.gather(
                 avto.scrape_routine(page_avto, conn, avto_crit),
                 njuskalo.scrape_routine(page_njus, conn, njus_crit),
@@ -69,10 +71,14 @@ async def run_browser_session():
             new_avto = results[0] if isinstance(results[0], int) else 0
             new_njus = results[1] if isinstance(results[1], int) else 0
             
+            # 3. Log Results
+            current_time = datetime.now().strftime('%H:%M:%S')
+            
             if new_avto + new_njus > 0:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ Cycle: {new_avto} Avto, {new_njus} Njuskalo")
+                print(f"[{current_time}] ⚡ Cycle: {new_avto} Avto, {new_njus} Njuskalo")
                 await asyncio.sleep(SLEEP_ACTIVE)
             else:
+                print(f"[{current_time}] 💤 Cycle: 0 Avto, 0 Njuskalo (Sleeping {int(SLEEP_IDLE)}s)")
                 await asyncio.sleep(SLEEP_IDLE)
 
 async def main():
