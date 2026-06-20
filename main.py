@@ -19,7 +19,8 @@ SLEEP_IDLE = 0.5
 SLEEP_ACTIVE = 0.1 
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
     cur = conn.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS cars (id TEXT PRIMARY KEY, link TEXT, name TEXT, image TEXT, price REAL, year INTEGER, mileage INTEGER, email_sent INTEGER DEFAULT 0, reason TEXT)""")
     cur.execute("CREATE TABLE IF NOT EXISTS car_specs (id TEXT, spec_key TEXT, spec_value TEXT)")
@@ -36,39 +37,23 @@ def load_settings():
     except: njus_c = {}
     return avto_c, njus_c
 
-async def avto_loop(page, conn):
+async def avto_loop(page):
+    conn = init_db()
     while True:
         try:
             avto_crit, _ = load_settings()
-            start_time = time.time()
-            result = await avto.scrape_routine(page, conn, avto_crit)
-            elapsed = time.time() - start_time
-            
-            ok, total, new = result if isinstance(result, tuple) else (False, 0, 0)
-            icon = "✅" if ok else "❌"
-            current_time = datetime.now().strftime('%H:%M:%S')
-            
-            print(f"[{current_time}] ⏱️ Avto {icon} | {elapsed:.2f}s | Found: {total} | Extracted: {new}")
-            
+            await avto.scrape_routine(page, conn, avto_crit)
             await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
             print(f"⚠️ Avto Loop Error: {e}")
             await asyncio.sleep(SLEEP_IDLE)
 
-async def njus_loop(page, conn):
+async def njus_loop(page):
+    conn = init_db()
     while True:
         try:
             _, njus_crit = load_settings()
-            start_time = time.time()
-            result = await njuskalo.scrape_routine(page, conn, njus_crit)
-            elapsed = time.time() - start_time
-            
-            ok, total, new = result if isinstance(result, tuple) else (False, 0, 0)
-            icon = "✅" if ok else "❌"
-            current_time = datetime.now().strftime('%H:%M:%S')
-            
-            print(f"[{current_time}] ⏱️ Njuskalo {icon} | {elapsed:.2f}s | Found: {total} | Extracted: {new}")
-            
+            await njuskalo.scrape_routine(page, conn, njus_crit)
             await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
             print(f"⚠️ Njuskalo Loop Error: {e}")
@@ -85,8 +70,6 @@ async def background_updates():
             await asyncio.sleep(5)
 
 async def run_browser_session():
-    conn = init_db()
-    
     print("🚀 Launching High-Performance Browser...")
     
     async with async_playwright() as p:
@@ -101,8 +84,8 @@ async def run_browser_session():
         print("✅ Browser Ready. Starting Independent Live Fetching...")
         
         await asyncio.gather(
-            avto_loop(page_avto, conn),
-            njus_loop(page_njus, conn),
+            avto_loop(page_avto),
+            njus_loop(page_njus),
             background_updates(),
             return_exceptions=True
         )

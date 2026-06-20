@@ -36,15 +36,13 @@ async def scrape_routine(page, conn, criteria):
 
         # WARMUP (Only if we aren't on the domain yet)
         if "njuskalo" not in page.url:
-            print("🔄 Njuskalo: Warming up session (Homepage)...")
             try:
                 await page.goto("https://www.njuskalo.hr/", timeout=15000, wait_until="domcontentloaded")
                 await asyncio.sleep(2)
             except:
-                print("⚠️ Njuskalo warmup timed out, proceeding to target...")
+                pass
 
         # TARGET NAVIGATION
-        print(f"🔄 Njuskalo: Loading listings...")
         await page.goto(current_url, wait_until="domcontentloaded", timeout=60000)
 
         # Check for Captcha
@@ -81,17 +79,11 @@ async def scrape_routine(page, conn, criteria):
             is_new = existing is None
             already_emailed = existing[0] if existing else 0
 
-            # Debug Print
-            if is_new:
-                 print(f"➕ Found New Njuskalo: {car.get('name')} | {car.get('price')} | {car.get('year')}")
-                 new_items_count += 1
-
             # Match Logic
             match, reason = check_car_against_criteria(car, criteria)
             should_send_email = 0
 
             if match and (is_new or already_emailed == 0):
-                print(f"🔔 MATCH Njuskalo: {car['name']} ({reason})")
                 if mail.send_email_sync(f"Njuskalo Match: {car['name']}", mail.format_car_email(car, reason)):
                     should_send_email = 1
             elif already_emailed == 1:
@@ -99,8 +91,17 @@ async def scrape_routine(page, conn, criteria):
 
             insert_car_with_status(conn, car, should_send_email, reason)
 
-        if new_items_count > 0:
-            conn.commit()
+            if is_new:
+                new_items_count += 1
+                if should_send_email == 1:
+                    status_str = f"📧 Email Sent (Match: {reason})"
+                elif match:
+                    status_str = "⚠️ Email Failed (Matched)"
+                else:
+                    status_str = "❌ No Match"
+                print(f"[Njuskalo] 🚗 {car.get('name')} | {status_str}")
+
+        conn.commit()
         return (True, len(listings), new_items_count)
 
     except Exception as e:

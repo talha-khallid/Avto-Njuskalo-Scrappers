@@ -35,18 +35,12 @@ async def scrape_routine(page, conn, criteria):
             is_new = existing is None
             already_emailed = existing[0] if existing else 0
             
-            # --- DEBUG PRINT (Only for NEW cars) ---
-            if is_new:
-                print(f"➕ Found New Avto: {car.get('name')} | Year: {car.get('year')} | Mileage: {car.get('mileage')} | Price: {car.get('price')}")
-                new_items_count += 1
-            
             # Check Criteria
             match, reason = check_car_against_criteria(car, criteria)
             should_send_email = 0
 
             # Email Logic
             if match and (is_new or already_emailed == 0):
-                print(f"🔔 MATCH Avto: {car['name']} ({reason})")
                 if mail.send_email_sync(f"Avto Match: {car['name']}", mail.format_car_email(car, reason)):
                     should_send_email = 1
             elif already_emailed == 1:
@@ -54,10 +48,18 @@ async def scrape_routine(page, conn, criteria):
 
             # Save
             insert_car_with_status(conn, car, should_send_email, reason)
+
+            if is_new:
+                new_items_count += 1
+                if should_send_email == 1:
+                    status_str = f"📧 Email Sent (Match: {reason})"
+                elif match:
+                    status_str = "⚠️ Email Failed (Matched)"
+                else:
+                    status_str = "❌ No Match"
+                print(f"[Avto] 🚗 {car.get('name')} | {status_str}")
         
-        if new_items_count > 0:
-            conn.commit()
-            
+        conn.commit()
         return (True, len(rows), new_items_count)
 
     except Exception as e:

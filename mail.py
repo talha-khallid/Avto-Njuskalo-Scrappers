@@ -49,7 +49,7 @@ def send_email(subject, body):
         #     server.login(email_sender, email_password)
         #     server.send_message(msg)
             
-        print(f"📧 Email sent: {subject}")
+        # print(f"📧 Email sent: {subject}")
         return True
     except Exception as e:
         print(f"❌ Error sending email: {e}")

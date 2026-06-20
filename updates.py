@@ -33,7 +33,7 @@ def sync_data():
             json.dump(avto_new, f, indent=4, ensure_ascii=False)
         print("✅ Avto updated")
     else:
-        print("ℹ️ Avto already up to date")
+        pass
 
     # --- Sync Njuskalo ---
     njuskalo_new = {"car_criteria": api_data.get("njuskalo", {})}
@@ -48,4 +48,4 @@ def sync_data():
             json.dump(njuskalo_new, f, indent=4, ensure_ascii=False)
         print("✅ Njuskalo updated")
     else:
-        print("ℹ️ Njuskalo already up to date")
+        pass
