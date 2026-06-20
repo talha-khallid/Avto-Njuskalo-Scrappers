@@ -14,8 +14,8 @@ import updates
 
 DB_FILE = "database.db"
 UPDATE_INTERVAL = 60 
-SLEEP_IDLE = 5.0 
-SLEEP_ACTIVE = 1.0 # Changed to 1.0 to prevent choking the CPU/Browser
+SLEEP_IDLE = 0.5 # Reduced for testing speed
+SLEEP_ACTIVE = 0.1 # Reduced for testing speed
 
 def init_db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -44,7 +44,7 @@ async def run_browser_session():
         browser = await p.chromium.launch(headless=True, args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--disable-extensions", "--blink-settings=imagesEnabled=false"])
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
-        await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font"] else route.continue_())
+        await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "websocket", "manifest"] else route.continue_())
 
         page_avto = await context.new_page()
         page_njus = await context.new_page()
@@ -62,23 +62,28 @@ async def run_browser_session():
                 last_update = time.time()
 
             # 2. Run Scrapers concurrently
+            start_time = time.time()
+            
+            # Pausing njuskalo for testing
             results = await asyncio.gather(
                 avto.scrape_routine(page_avto, conn, avto_crit),
-                njuskalo.scrape_routine(page_njus, conn, njus_crit),
                 return_exceptions=True
             )
             
-            new_avto = results[0] if isinstance(results[0], int) else 0
-            new_njus = results[1] if isinstance(results[1], int) else 0
+            elapsed = time.time() - start_time
+            
+            avto_result = results[0]
+            success, total_fetched, new_avto = avto_result if isinstance(avto_result, tuple) else (False, 0, 0)
             
             # 3. Log Results
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            if new_avto + new_njus > 0:
-                print(f"[{current_time}] ⚡ Cycle: {new_avto} Avto, {new_njus} Njuskalo")
+            status_emoji = "✅" if success else "❌"
+            print(f"[{current_time}] ⏱️ Avto {status_emoji} | {elapsed:.2f}s | Found: {total_fetched} | Extracted: {new_avto}")
+            
+            if new_avto > 0:
                 await asyncio.sleep(SLEEP_ACTIVE)
             else:
-                print(f"[{current_time}] 💤 Cycle: 0 Avto, 0 Njuskalo (Sleeping {int(SLEEP_IDLE)}s)")
                 await asyncio.sleep(SLEEP_IDLE)
 
 async def main():

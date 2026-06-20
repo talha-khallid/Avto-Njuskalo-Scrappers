@@ -18,7 +18,7 @@ async def scrape_routine(page, conn, criteria):
         soup = BeautifulSoup(html, "html.parser")
 
         form = soup.find("form", {"id": "results"})
-        if not form: return 0
+        if not form: return (False, 0, 0)
 
         rows = form.select("div.GO-Results-Row")
         new_items_count = 0
@@ -58,11 +58,11 @@ async def scrape_routine(page, conn, criteria):
         if new_items_count > 0:
             conn.commit()
             
-        return new_items_count
+        return (True, len(rows), new_items_count)
 
     except Exception as e:
         print(f"⚠️ Avto Scrape Error: {e}")
-        return 0
+        return (False, 0, 0)
 
 def parse_car_row(row, base_url):
     try:
