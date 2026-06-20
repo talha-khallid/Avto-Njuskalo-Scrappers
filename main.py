@@ -12,10 +12,16 @@ import avto
 import njuskalo
 import updates
 
+import sys
+import builtins
+from rich.live import Live
+from rich.layout import Layout
+from rich.panel import Panel
+
 DB_FILE = "database.db"
 UPDATE_INTERVAL = 60 
-SLEEP_IDLE = 0.5 # Reduced for testing speed
-SLEEP_ACTIVE = 0.1 # Reduced for testing speed
+SLEEP_IDLE = 0.5 
+SLEEP_ACTIVE = 0.1 
 
 def init_db():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
@@ -35,7 +41,48 @@ def load_settings():
     except: njus_c = {}
     return avto_c, njus_c
 
-async def avto_loop(page, conn):
+# Global Dashboard State
+DASHBOARD_STATE = {
+    "avto": [],
+    "njuskalo": []
+}
+
+class DashboardPrint:
+    def __init__(self, original_print):
+        self.original = original_print
+    
+    def __call__(self, *args, **kwargs):
+        msg = " ".join(str(a) for a in args).strip()
+        if not msg: return
+        
+        # Route the print to the correct dashboard history
+        if "Avto" in msg or "avto" in msg.lower():
+            DASHBOARD_STATE["avto"].append(msg)
+        elif "Njuskalo" in msg or "njus" in msg.lower():
+            DASHBOARD_STATE["njuskalo"].append(msg)
+        else:
+            # Fallback to Avto for generic messages like Browser Launch
+            DASHBOARD_STATE["avto"].append(msg)
+
+# Hijack print to show inside the dashboard
+builtins.print = DashboardPrint(builtins.print)
+
+def create_layout():
+    layout = Layout()
+    layout.split_row(
+        Layout(name="left"),
+        Layout(name="right")
+    )
+    
+    # Keep only last 25 messages to fit on screen
+    avto_logs = "\n".join(DASHBOARD_STATE["avto"][-25:])
+    njus_logs = "\n".join(DASHBOARD_STATE["njuskalo"][-25:])
+    
+    layout["left"].update(Panel(avto_logs, title="🏎️  AVTO.NET", border_style="green"))
+    layout["right"].update(Panel(njus_logs, title="🚙 NJUSKALO.HR", border_style="blue"))
+    return layout
+
+async def avto_loop(page, conn, live):
     while True:
         try:
             avto_crit, _ = load_settings()
@@ -47,15 +94,16 @@ async def avto_loop(page, conn):
             icon = "✅" if ok else "❌"
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            log = f"[{current_time}] 🏎️  Avto {icon} | {elapsed:.2f}s | F:{total} E:{new}"
-            print(f"{log:<50}")
+            DASHBOARD_STATE["avto"].append(f"[{current_time}] ⏱️ Cycle {icon} | {elapsed:.2f}s | Found: {total} | Extracted: {new}")
+            live.update(create_layout())
             
             await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
-            print(f"Avto Loop Error: {e}")
+            DASHBOARD_STATE["avto"].append(f"Avto Loop Error: {e}")
+            live.update(create_layout())
             await asyncio.sleep(SLEEP_IDLE)
 
-async def njus_loop(page, conn):
+async def njus_loop(page, conn, live):
     while True:
         try:
             _, njus_crit = load_settings()
@@ -67,12 +115,13 @@ async def njus_loop(page, conn):
             icon = "✅" if ok else "❌"
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            log = f"[{current_time}] 🚙 Njuskalo {icon} | {elapsed:.2f}s | F:{total} E:{new}"
-            print(f"{' '*50}{log}")
+            DASHBOARD_STATE["njuskalo"].append(f"[{current_time}] ⏱️ Cycle {icon} | {elapsed:.2f}s | Found: {total} | Extracted: {new}")
+            live.update(create_layout())
             
             await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
-            print(f"Njuskalo Loop Error: {e}")
+            DASHBOARD_STATE["njuskalo"].append(f"Njuskalo Loop Error: {e}")
+            live.update(create_layout())
             await asyncio.sleep(SLEEP_IDLE)
 
 async def background_updates():
@@ -83,31 +132,33 @@ async def background_updates():
             await loop.run_in_executor(executor, updates.sync_data)
             await asyncio.sleep(UPDATE_INTERVAL)
         except Exception as e:
-            print(f"Background Update Error: {e}")
             await asyncio.sleep(5)
 
 async def run_browser_session():
     conn = init_db()
     
-    print("🚀 Launching High-Performance Browser...")
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--disable-extensions", "--blink-settings=imagesEnabled=false"])
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
-        await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "websocket", "manifest"] else route.continue_())
+    with Live(create_layout(), refresh_per_second=10, screen=True) as live:
+        builtins.print("🚀 Launching High-Performance Browser...")
+        live.update(create_layout())
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True, args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--disable-extensions", "--blink-settings=imagesEnabled=false"])
+            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            await context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
+            await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "websocket", "manifest"] else route.continue_())
 
-        page_avto = await context.new_page()
-        page_njus = await context.new_page()
-        
-        print("✅ Browser Ready. Starting Independent Live Fetching...")
-        print(f"{'--- AVTO.NET ---':<50}{'--- NJUSKALO.HR ---'}")
-        
-        await asyncio.gather(
-            avto_loop(page_avto, conn),
-            njus_loop(page_njus, conn),
-            background_updates(),
-            return_exceptions=True
-        )
+            page_avto = await context.new_page()
+            page_njus = await context.new_page()
+            
+            builtins.print("✅ Browser Ready. Starting Independent Live Fetching...")
+            live.update(create_layout())
+            
+            await asyncio.gather(
+                avto_loop(page_avto, conn, live),
+                njus_loop(page_njus, conn, live),
+                background_updates(),
+                return_exceptions=True
+            )
 
 async def main():
     while True:
@@ -116,7 +167,6 @@ async def main():
         except KeyboardInterrupt:
             break
         except Exception as e:
-            print(f"💥 Browser Crash: {e}. Restarting...")
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
