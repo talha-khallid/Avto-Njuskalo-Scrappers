@@ -56,13 +56,17 @@ class DashboardPrint:
         if not msg: return
         
         # Route the print to the correct dashboard history
-        if "Avto" in msg or "avto" in msg.lower():
-            DASHBOARD_STATE["avto"].append(msg)
-        elif "Njuskalo" in msg or "njus" in msg.lower():
+        if "njus" in msg.lower():
             DASHBOARD_STATE["njuskalo"].append(msg)
         else:
-            # Fallback to Avto for generic messages like Browser Launch
+            # Fallback to Avto for generic messages/browser logs
             DASHBOARD_STATE["avto"].append(msg)
+            
+        # Keep lists from growing indefinitely to prevent memory issues
+        if len(DASHBOARD_STATE["avto"]) > 100:
+            DASHBOARD_STATE["avto"] = DASHBOARD_STATE["avto"][-100:]
+        if len(DASHBOARD_STATE["njuskalo"]) > 100:
+            DASHBOARD_STATE["njuskalo"] = DASHBOARD_STATE["njuskalo"][-100:]
 
 # Hijack print to show inside the dashboard
 builtins.print = DashboardPrint(builtins.print)
@@ -82,7 +86,7 @@ def create_layout():
     layout["right"].update(Panel(njus_logs, title="🚙 NJUSKALO.HR", border_style="blue"))
     return layout
 
-async def avto_loop(page, conn, live):
+async def avto_loop(page, conn):
     while True:
         try:
             avto_crit, _ = load_settings()
@@ -94,16 +98,14 @@ async def avto_loop(page, conn, live):
             icon = "✅" if ok else "❌"
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            DASHBOARD_STATE["avto"].append(f"[{current_time}] ⏱️ Cycle {icon} | {elapsed:.2f}s | Found: {total} | Extracted: {new}")
-            live.update(create_layout())
+            print(f"[{current_time}] ⏱️ Avto Cycle {icon} | {elapsed:.2f}s | Found: {total} | Extracted: {new}")
             
             await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
-            DASHBOARD_STATE["avto"].append(f"Avto Loop Error: {e}")
-            live.update(create_layout())
+            print(f"⚠️ Avto Loop Error: {e}")
             await asyncio.sleep(SLEEP_IDLE)
 
-async def njus_loop(page, conn, live):
+async def njus_loop(page, conn):
     while True:
         try:
             _, njus_crit = load_settings()
@@ -115,13 +117,11 @@ async def njus_loop(page, conn, live):
             icon = "✅" if ok else "❌"
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            DASHBOARD_STATE["njuskalo"].append(f"[{current_time}] ⏱️ Cycle {icon} | {elapsed:.2f}s | Found: {total} | Extracted: {new}")
-            live.update(create_layout())
+            print(f"[{current_time}] ⏱️ Njuskalo Cycle {icon} | {elapsed:.2f}s | Found: {total} | Extracted: {new}")
             
             await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
-            DASHBOARD_STATE["njuskalo"].append(f"Njuskalo Loop Error: {e}")
-            live.update(create_layout())
+            print(f"⚠️ Njuskalo Loop Error: {e}")
             await asyncio.sleep(SLEEP_IDLE)
 
 async def background_updates():
@@ -137,9 +137,8 @@ async def background_updates():
 async def run_browser_session():
     conn = init_db()
     
-    with Live(create_layout(), refresh_per_second=10, screen=True) as live:
-        builtins.print("🚀 Launching High-Performance Browser...")
-        live.update(create_layout())
+    with Live(get_renderable=create_layout, refresh_per_second=4, screen=True) as live:
+        print("🚀 Launching High-Performance Browser...")
         
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True, args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--disable-extensions", "--blink-settings=imagesEnabled=false"])
@@ -150,12 +149,11 @@ async def run_browser_session():
             page_avto = await context.new_page()
             page_njus = await context.new_page()
             
-            builtins.print("✅ Browser Ready. Starting Independent Live Fetching...")
-            live.update(create_layout())
+            print("✅ Browser Ready. Starting Independent Live Fetching...")
             
             await asyncio.gather(
-                avto_loop(page_avto, conn, live),
-                njus_loop(page_njus, conn, live),
+                avto_loop(page_avto, conn),
+                njus_loop(page_njus, conn),
                 background_updates(),
                 return_exceptions=True
             )
