@@ -35,9 +35,59 @@ def load_settings():
     except: njus_c = {}
     return avto_c, njus_c
 
+async def avto_loop(page, conn):
+    while True:
+        try:
+            avto_crit, _ = load_settings()
+            start_time = time.time()
+            result = await avto.scrape_routine(page, conn, avto_crit)
+            elapsed = time.time() - start_time
+            
+            ok, total, new = result if isinstance(result, tuple) else (False, 0, 0)
+            icon = "✅" if ok else "❌"
+            current_time = datetime.now().strftime('%H:%M:%S')
+            
+            log = f"[{current_time}] 🏎️  Avto {icon} | {elapsed:.2f}s | F:{total} E:{new}"
+            print(f"{log:<50}")
+            
+            await asyncio.sleep(SLEEP_ACTIVE)
+        except Exception as e:
+            print(f"Avto Loop Error: {e}")
+            await asyncio.sleep(SLEEP_IDLE)
+
+async def njus_loop(page, conn):
+    while True:
+        try:
+            _, njus_crit = load_settings()
+            start_time = time.time()
+            result = await njuskalo.scrape_routine(page, conn, njus_crit)
+            elapsed = time.time() - start_time
+            
+            ok, total, new = result if isinstance(result, tuple) else (False, 0, 0)
+            icon = "✅" if ok else "❌"
+            current_time = datetime.now().strftime('%H:%M:%S')
+            
+            log = f"[{current_time}] 🚙 Njuskalo {icon} | {elapsed:.2f}s | F:{total} E:{new}"
+            print(f"{' '*50}{log}")
+            
+            await asyncio.sleep(SLEEP_ACTIVE)
+        except Exception as e:
+            print(f"Njuskalo Loop Error: {e}")
+            await asyncio.sleep(SLEEP_IDLE)
+
+async def background_updates():
+    executor = ThreadPoolExecutor(max_workers=1)
+    while True:
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(executor, updates.sync_data)
+            await asyncio.sleep(UPDATE_INTERVAL)
+        except Exception as e:
+            print(f"Background Update Error: {e}")
+            await asyncio.sleep(5)
+
 async def run_browser_session():
     conn = init_db()
-    executor = ThreadPoolExecutor(max_workers=3)
     
     print("🚀 Launching High-Performance Browser...")
     async with async_playwright() as p:
@@ -49,47 +99,15 @@ async def run_browser_session():
         page_avto = await context.new_page()
         page_njus = await context.new_page()
         
-        print("✅ Browser Ready.")
-        avto_crit, njus_crit = load_settings()
-        last_update = 0
+        print("✅ Browser Ready. Starting Independent Live Fetching...")
+        print(f"{'--- AVTO.NET ---':<50}{'--- NJUSKALO.HR ---'}")
         
-        while True:
-            # 1. Background Updates
-            if time.time() - last_update > UPDATE_INTERVAL:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(executor, updates.sync_data)
-                avto_crit, njus_crit = load_settings()
-                last_update = time.time()
-
-            # 2. Run Scrapers concurrently
-            start_time = time.time()
-            
-            results = await asyncio.gather(
-                avto.scrape_routine(page_avto, conn, avto_crit),
-                njuskalo.scrape_routine(page_njus, conn, njus_crit),
-                return_exceptions=True
-            )
-            
-            elapsed = time.time() - start_time
-            
-            avto_result = results[0]
-            avto_ok, avto_total, new_avto = avto_result if isinstance(avto_result, tuple) else (False, 0, 0)
-            
-            njus_result = results[1]
-            njus_ok, njus_total, new_njus = njus_result if isinstance(njus_result, tuple) else (False, 0, 0)
-            
-            # 3. Log Results
-            current_time = datetime.now().strftime('%H:%M:%S')
-            
-            avto_icon = "✅" if avto_ok else "❌"
-            njus_icon = "✅" if njus_ok else "❌"
-            
-            print(f"[{current_time}] ⏱️ Cycle: {elapsed:.2f}s | Avto {avto_icon} F:{avto_total} E:{new_avto} | Njuskalo {njus_icon} F:{njus_total} E:{new_njus}")
-            
-            if new_avto + new_njus > 0:
-                await asyncio.sleep(SLEEP_ACTIVE)
-            else:
-                await asyncio.sleep(SLEEP_IDLE)
+        await asyncio.gather(
+            avto_loop(page_avto, conn),
+            njus_loop(page_njus, conn),
+            background_updates(),
+            return_exceptions=True
+        )
 
 async def main():
     while True:
