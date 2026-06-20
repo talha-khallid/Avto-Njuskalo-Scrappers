@@ -5,6 +5,7 @@ import json
 import sqlite3
 import traceback
 import sys
+import builtins
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from playwright.async_api import async_playwright
@@ -17,6 +18,16 @@ DB_FILE = "database.db"
 UPDATE_INTERVAL = 60 
 SLEEP_IDLE = 0.5 
 SLEEP_ACTIVE = 0.1 
+
+# Global Status State for Heartbeat TUI
+STATUS_STATE = {
+    "avto_status": "starting",
+    "avto_cycles": 0,
+    "njus_status": "starting",
+    "njus_cycles": 0
+}
+
+original_print = builtins.print
 
 def init_db():
     conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
@@ -37,14 +48,52 @@ def load_settings():
     except: njus_c = {}
     return avto_c, njus_c
 
+def update_heartbeat():
+    current_time = datetime.now().strftime('%H:%M:%S')
+    avto_str = f"Avto: {STATUS_STATE['avto_status']} (C:{STATUS_STATE['avto_cycles']})"
+    njus_str = f"Njuskalo: {STATUS_STATE['njus_status']} (C:{STATUS_STATE['njus_cycles']})"
+    sys.stdout.write(f"\r[{current_time}] 🔍 {avto_str} | {njus_str}                   ")
+    sys.stdout.flush()
+
+class DashboardPrint:
+    def __init__(self, original_print_func):
+        self.orig = original_print_func
+        
+    def __call__(self, *args, **kwargs):
+        # Clear heartbeat line
+        sys.stdout.write("\r" + " " * 110 + "\r")
+        sys.stdout.flush()
+        
+        # Print normal output
+        self.orig(*args, **kwargs)
+        
+        # Restore heartbeat line
+        update_heartbeat()
+
+# Hijack print to keep heartbeat at the bottom
+builtins.print = DashboardPrint(original_print)
+
 async def avto_loop(page):
     conn = init_db()
     while True:
         try:
             avto_crit, _ = load_settings()
+            start_time = time.time()
+            
+            STATUS_STATE["avto_status"] = "fetching"
+            update_heartbeat()
+            
             await avto.scrape_routine(page, conn, avto_crit)
+            elapsed = time.time() - start_time
+            
+            STATUS_STATE["avto_cycles"] += 1
+            STATUS_STATE["avto_status"] = f"idle ({elapsed:.1f}s)"
+            update_heartbeat()
+            
             await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
+            STATUS_STATE["avto_status"] = f"error"
+            update_heartbeat()
             print(f"⚠️ Avto Loop Error: {e}")
             await asyncio.sleep(SLEEP_IDLE)
 
@@ -53,9 +102,22 @@ async def njus_loop(page):
     while True:
         try:
             _, njus_crit = load_settings()
+            start_time = time.time()
+            
+            STATUS_STATE["njus_status"] = "fetching"
+            update_heartbeat()
+            
             await njuskalo.scrape_routine(page, conn, njus_crit)
+            elapsed = time.time() - start_time
+            
+            STATUS_STATE["njus_cycles"] += 1
+            STATUS_STATE["njus_status"] = f"idle ({elapsed:.1f}s)"
+            update_heartbeat()
+            
             await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
+            STATUS_STATE["njus_status"] = f"error"
+            update_heartbeat()
             print(f"⚠️ Njuskalo Loop Error: {e}")
             await asyncio.sleep(SLEEP_IDLE)
 
@@ -95,6 +157,8 @@ async def main():
         try:
             await run_browser_session()
         except KeyboardInterrupt:
+            # Clear heartbeat line on exit so terminal looks clean
+            original_print("\r" + " " * 110 + "\r", end="")
             break
         except Exception as e:
             await asyncio.sleep(5)

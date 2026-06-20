@@ -13,7 +13,7 @@ async def scrape_routine(page, conn, criteria):
         current_url = f"{URL}&_t={int(time.time())}"
         
         # Fast load
-        await page.goto(current_url, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(current_url, wait_until="domcontentloaded", timeout=20000)
         html = await page.content()
         soup = BeautifulSoup(html, "html.parser")
 

@@ -43,7 +43,7 @@ async def scrape_routine(page, conn, criteria):
                 pass
 
         # TARGET NAVIGATION
-        await page.goto(current_url, wait_until="domcontentloaded", timeout=60000)
+        await page.goto(current_url, wait_until="domcontentloaded", timeout=20000)
 
         # Check for Captcha
         title = await page.title()
