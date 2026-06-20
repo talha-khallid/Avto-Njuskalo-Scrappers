@@ -62,7 +62,7 @@ async def scrape_routine(page, conn, criteria):
 
         if not main_container:
             print(f"⚠️ Njuskalo: Could not find main list. Page Title: {title}")
-            return 0
+            return (False, 0, 0)
 
         listings = main_container.select('li')
         new_items_count = 0
@@ -101,11 +101,11 @@ async def scrape_routine(page, conn, criteria):
 
         if new_items_count > 0:
             conn.commit()
-        return new_items_count
+        return (True, len(listings), new_items_count)
 
     except Exception as e:
         print(f"⚠️ Njuskalo Error: {e}")
-        return 0
+        return (False, 0, 0)
 
 # --- HELPERS ---
 

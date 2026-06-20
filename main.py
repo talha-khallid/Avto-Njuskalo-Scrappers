@@ -64,24 +64,29 @@ async def run_browser_session():
             # 2. Run Scrapers concurrently
             start_time = time.time()
             
-            # Pausing njuskalo for testing
             results = await asyncio.gather(
                 avto.scrape_routine(page_avto, conn, avto_crit),
+                njuskalo.scrape_routine(page_njus, conn, njus_crit),
                 return_exceptions=True
             )
             
             elapsed = time.time() - start_time
             
             avto_result = results[0]
-            success, total_fetched, new_avto = avto_result if isinstance(avto_result, tuple) else (False, 0, 0)
+            avto_ok, avto_total, new_avto = avto_result if isinstance(avto_result, tuple) else (False, 0, 0)
+            
+            njus_result = results[1]
+            njus_ok, njus_total, new_njus = njus_result if isinstance(njus_result, tuple) else (False, 0, 0)
             
             # 3. Log Results
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            status_emoji = "✅" if success else "❌"
-            print(f"[{current_time}] ⏱️ Avto {status_emoji} | {elapsed:.2f}s | Found: {total_fetched} | Extracted: {new_avto}")
+            avto_icon = "✅" if avto_ok else "❌"
+            njus_icon = "✅" if njus_ok else "❌"
             
-            if new_avto > 0:
+            print(f"[{current_time}] ⏱️ Cycle: {elapsed:.2f}s | Avto {avto_icon} F:{avto_total} E:{new_avto} | Njuskalo {njus_icon} F:{njus_total} E:{new_njus}")
+            
+            if new_avto + new_njus > 0:
                 await asyncio.sleep(SLEEP_ACTIVE)
             else:
                 await asyncio.sleep(SLEEP_IDLE)
