@@ -1,70 +1,70 @@
 {
     "car_criteria": [
         {
-            "name": "toyota",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": 2015,
-            "max_mileage": null
+            "min_year": null,
+            "name": "toyota"
         },
         {
-            "name": "sprinter",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": 2000,
-            "max_mileage": null
+            "min_year": null,
+            "name": "sprinter"
         },
         {
-            "name": "C-Razred",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": 2000,
-            "max_mileage": null
+            "min_year": null,
+            "name": "C-Razred"
         },
         {
-            "name": "mercedes-benz c razred",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": 2000,
-            "max_mileage": null
+            "min_year": null,
+            "name": "mercedes-benz c razred"
         },
         {
-            "name": "Nissan Navara",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": null,
-            "max_mileage": null
+            "min_year": null,
+            "name": "Nissan Navara"
         },
         {
-            "name": "Mitsubishi l 200",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": null,
-            "max_mileage": null
+            "min_year": null,
+            "name": "Mitsubishi l 200"
         },
         {
-            "name": "renault kangoo",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": null,
-            "max_mileage": null
+            "min_year": null,
+            "name": "renault kangoo"
         },
         {
-            "name": "Volkswagen sharan",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": 2000,
-            "max_mileage": null
+            "min_year": null,
+            "name": "Volkswagen sharan"
         },
         {
-            "name": "Peugeot 406",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": null,
-            "max_mileage": null
+            "min_year": null,
+            "name": "Peugeot 406"
         },
         {
-            "name": "Mazda primacy",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": null,
-            "max_mileage": null
+            "min_year": null,
+            "name": "Mazda primacy"
         },
         {
-            "name": "Nissan king cab",
-            "min_year": null,
+            "max_mileage": null,
             "max_year": null,
-            "max_mileage": null
+            "min_year": null,
+            "name": "Nissan king cab"
         }
     ]
 }
