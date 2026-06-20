@@ -41,7 +41,7 @@ async def scrape_routine(page, conn, criteria):
                 await page.goto("https://www.njuskalo.hr/", timeout=15000, wait_until="domcontentloaded")
                 await asyncio.sleep(2)
             except:
-                print("⚠️ Warmup timed out, proceeding to target...")
+                print("⚠️ Njuskalo warmup timed out, proceeding to target...")
 
         # TARGET NAVIGATION
         print(f"🔄 Njuskalo: Loading listings...")
@@ -210,7 +210,7 @@ def parse_car_listing(listing, base_url):
 
         return car_data
     except Exception as e:
-        print(f"Error parsing: {e}")
+        print(f"⚠️ Njuskalo Error parsing: {e}")
         return None
 
 def check_car_against_criteria(car, criteria):
