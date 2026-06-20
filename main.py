@@ -5,7 +5,6 @@ import json
 import sqlite3
 import traceback
 import sys
-import builtins
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from playwright.async_api import async_playwright
@@ -37,30 +36,6 @@ def load_settings():
     except: njus_c = {}
     return avto_c, njus_c
 
-# Save reference to original print function
-original_print = builtins.print
-
-class DashboardPrint:
-    def __init__(self, original_print):
-        self.original = original_print
-        self.left_width = 55
-    
-    def __call__(self, *args, **kwargs):
-        msg = " ".join(str(a) for a in args).strip()
-        if not msg: return
-        
-        lines = msg.split("\n")
-        for line in lines:
-            if "njus" in line.lower():
-                # Print on the right side
-                self.original(f"{'':<{self.left_width}} | {line}")
-            else:
-                # Print on the left side
-                self.original(f"{line:<{self.left_width}} |")
-
-# Hijack print to show inside the dashboard
-builtins.print = DashboardPrint(original_print)
-
 async def avto_loop(page, conn):
     while True:
         try:
@@ -73,7 +48,7 @@ async def avto_loop(page, conn):
             icon = "✅" if ok else "❌"
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            print(f"[{current_time}] ⏱️ Avto {icon} | {elapsed:.2f}s | F:{total} E:{new}")
+            print(f"[{current_time}] ⏱️ Avto {icon} | {elapsed:.2f}s | Found: {total} | Extracted: {new}")
             
             await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
@@ -92,7 +67,7 @@ async def njus_loop(page, conn):
             icon = "✅" if ok else "❌"
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            print(f"[{current_time}] ⏱️ Njuskalo {icon} | {elapsed:.2f}s | F:{total} E:{new}")
+            print(f"[{current_time}] ⏱️ Njuskalo {icon} | {elapsed:.2f}s | Found: {total} | Extracted: {new}")
             
             await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
@@ -111,11 +86,6 @@ async def background_updates():
 
 async def run_browser_session():
     conn = init_db()
-    
-    # Print Header once at start
-    left_w = 55
-    original_print(f"\n{'🏎️  AVTO.NET':<{left_w}} | {'🚙 NJUSKALO.HR'}")
-    original_print(f"{'-'*left_w}-+-{'-'*55}\n")
     
     print("🚀 Launching High-Performance Browser...")
     
