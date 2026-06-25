@@ -6,6 +6,7 @@ import sqlite3
 import traceback
 import sys
 import builtins
+import random
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from playwright.async_api import async_playwright
@@ -90,7 +91,13 @@ async def avto_loop(page):
             STATUS_STATE["avto_status"] = f"idle ({elapsed:.1f}s)"
             update_heartbeat()
             
-            await asyncio.sleep(SLEEP_ACTIVE)
+            if STATUS_STATE["avto_cycles"] % 5 == 0:
+                gap = random.uniform(5.0, 10.0)
+                STATUS_STATE["avto_status"] = f"cooling ({gap:.1f}s)"
+                update_heartbeat()
+                await asyncio.sleep(gap)
+            else:
+                await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
             STATUS_STATE["avto_status"] = f"error"
             update_heartbeat()
@@ -114,7 +121,13 @@ async def njus_loop(page):
             STATUS_STATE["njus_status"] = f"idle ({elapsed:.1f}s)"
             update_heartbeat()
             
-            await asyncio.sleep(SLEEP_ACTIVE)
+            if STATUS_STATE["njus_cycles"] % 5 == 0:
+                gap = random.uniform(5.0, 10.0)
+                STATUS_STATE["njus_status"] = f"cooling ({gap:.1f}s)"
+                update_heartbeat()
+                await asyncio.sleep(gap)
+            else:
+                await asyncio.sleep(SLEEP_ACTIVE)
         except Exception as e:
             STATUS_STATE["njus_status"] = f"error"
             update_heartbeat()

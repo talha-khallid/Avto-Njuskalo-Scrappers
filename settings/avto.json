@@ -3,7 +3,7 @@
         {
             "max_mileage": null,
             "max_year": 2015,
-            "min_year": null,
+            "min_year": 1980,
             "name": "toyota"
         },
         {
@@ -65,6 +65,12 @@
             "max_year": null,
             "min_year": null,
             "name": "Nissan king cab"
+        },
+        {
+            "max_mileage": null,
+            "max_year": 2012,
+            "min_year": null,
+            "name": "Suzuki vitara"
         }
     ]
 }

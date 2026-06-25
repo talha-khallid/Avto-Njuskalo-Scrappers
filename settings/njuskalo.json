@@ -2,6 +2,6 @@
     "car_criteria": {
         "max_price": null,
         "max_year": 2015,
-        "min_year": null
+        "min_year": 1980
     }
 }
