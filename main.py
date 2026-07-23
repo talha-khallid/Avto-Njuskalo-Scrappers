@@ -16,9 +16,20 @@ import njuskalo
 import updates
 
 DB_FILE = "database.db"
-UPDATE_INTERVAL = 60 
-SLEEP_IDLE = 0.5 
-SLEEP_ACTIVE = 0.1 
+UPDATE_INTERVAL = 60
+SLEEP_IDLE = 0.5
+SLEEP_ACTIVE = 0.1
+
+# --- Anti-captcha / session recycling ---
+# How many consecutive captcha blocks before we throw away the browser and
+# relaunch a fresh one (fresh cookies + fresh TLS/HTTP fingerprint).
+CAPTCHA_RESTART_THRESHOLD = 3
+# Hard cap: relaunch the browser every N seconds no matter what, so a session
+# never lives long enough to accumulate bot-detection heat. (0 disables.)
+SESSION_MAX_AGE = 1200  # 20 minutes
+# When blocked, back off this long before retrying (escalates per consecutive block).
+CAPTCHA_BACKOFF_BASE = 20.0
+CAPTCHA_BACKOFF_MAX = 90.0
 
 # Global Status State for Heartbeat TUI
 STATUS_STATE = {
@@ -104,26 +115,48 @@ async def avto_loop(page):
             print(f"⚠️ Avto Loop Error: {e}")
             await asyncio.sleep(SLEEP_IDLE)
 
-async def njus_loop(page):
+async def njus_loop(page, restart_event):
     conn = init_db()
+    consecutive_captchas = 0
     while True:
         try:
             _, njus_crit = load_settings()
             start_time = time.time()
-            
+
             STATUS_STATE["njus_status"] = "fetching"
             update_heartbeat()
-            
-            await njuskalo.scrape_routine(page, conn, njus_crit)
+
+            success, _total, _new = await njuskalo.scrape_routine(page, conn, njus_crit)
             elapsed = time.time() - start_time
-            
+
             STATUS_STATE["njus_cycles"] += 1
+
+            # success is None specifically when a captcha/ShieldSquare block was hit.
+            if success is None:
+                consecutive_captchas += 1
+
+                if consecutive_captchas >= CAPTCHA_RESTART_THRESHOLD:
+                    print(f"♻️ Njuskalo blocked {consecutive_captchas}x in a row — relaunching browser for a fresh session...")
+                    restart_event.set()
+                    return  # supervisor will tear down and relaunch the browser
+
+                # Escalating backoff so we stop hammering while blocked.
+                backoff = min(CAPTCHA_BACKOFF_BASE * consecutive_captchas, CAPTCHA_BACKOFF_MAX)
+                STATUS_STATE["njus_status"] = f"blocked, backoff {backoff:.0f}s ({consecutive_captchas}/{CAPTCHA_RESTART_THRESHOLD})"
+                update_heartbeat()
+                await asyncio.sleep(backoff)
+                continue
+
+            # Clean cycle — reset the block counter.
+            consecutive_captchas = 0
             STATUS_STATE["njus_status"] = f"idle ({elapsed:.1f}s)"
             update_heartbeat()
-            
+
             # Polling delay: wait 5-8s to avoid triggering ShieldSquare / WAF rate-limiting
             gap = random.uniform(5.0, 8.0)
             await asyncio.sleep(gap)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             STATUS_STATE["njus_status"] = f"error"
             update_heartbeat()
@@ -140,9 +173,20 @@ async def background_updates():
         except Exception as e:
             await asyncio.sleep(5)
 
+async def session_timer(restart_event):
+    """Force a browser relaunch every SESSION_MAX_AGE seconds."""
+    if not SESSION_MAX_AGE:
+        return
+    await asyncio.sleep(SESSION_MAX_AGE)
+    print(f"♻️ Session reached max age ({SESSION_MAX_AGE}s) — relaunching browser...")
+    restart_event.set()
+
+
 async def run_browser_session():
     print("🚀 Launching High-Performance Browser...")
-    
+
+    restart_event = asyncio.Event()
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--disable-extensions", "--blink-settings=imagesEnabled=false"])
         context = await browser.new_context(
@@ -155,20 +199,36 @@ async def run_browser_session():
 
         page_avto = await context.new_page()
         page_njus = await context.new_page()
-        
+
         print("✅ Browser Ready. Starting Independent Live Fetching...")
-        
-        await asyncio.gather(
-            avto_loop(page_avto),
-            njus_loop(page_njus),
-            background_updates(),
-            return_exceptions=True
-        )
+
+        tasks = [
+            asyncio.create_task(avto_loop(page_avto)),
+            asyncio.create_task(njus_loop(page_njus, restart_event)),
+            asyncio.create_task(background_updates()),
+            asyncio.create_task(session_timer(restart_event)),
+        ]
+
+        # Run until something asks for a browser relaunch (repeated captchas or max age).
+        await restart_event.wait()
+
+        # Tear down this session cleanly; main()'s loop will relaunch a fresh one.
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            await context.close()
+            await browser.close()
+        except Exception:
+            pass
 
 async def main():
     while True:
         try:
             await run_browser_session()
+            # Brief cooldown between sessions so a fresh browser doesn't immediately
+            # re-hit the site (and possibly re-trip the same block).
+            await asyncio.sleep(random.uniform(8.0, 15.0))
         except KeyboardInterrupt:
             # Clear heartbeat line on exit so terminal looks clean
             original_print("\r" + " " * 110 + "\r", end="")

@@ -50,14 +50,11 @@ async def scrape_routine(page, conn, criteria):
         # Check for Captcha
         title = await page.title()
         if "ShieldSquare" in title or "Captcha" in title or "Pristup odabranim stranicama je onemogućen" in title:
-            print(f"⚠️ Njuskalo BLOCKED: Captcha detected. Resetting session...")
-            try:
-                await page.context().clear_cookies()
-                await page.goto("https://www.njuskalo.hr/", timeout=15000, wait_until="domcontentloaded")
-                await asyncio.sleep(5)
-            except:
-                pass
-            return (False, 0, 0)
+            print(f"⚠️ Njuskalo BLOCKED: Captcha detected.")
+            # Return None (not False) to signal a captcha block specifically.
+            # main.py counts these and triggers a full browser relaunch, which is
+            # the only thing that reliably clears a ShieldSquare session block.
+            return (None, 0, 0)
         
         # --- 2. PARSING ---
         html = await page.content()
