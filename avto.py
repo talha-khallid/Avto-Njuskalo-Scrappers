@@ -18,7 +18,10 @@ async def scrape_routine(page, conn, criteria):
         soup = BeautifulSoup(html, "html.parser")
 
         form = soup.find("form", {"id": "results"})
-        if not form: return (False, 0, 0)
+        if not form:
+            page_title = (soup.title.string.strip() if soup.title and soup.title.string else "?")
+            print(f"⚠️ Avto: no results form (page title: {page_title!r}) — avto.net likely rate-limiting/blocking.")
+            return (False, 0, 0)
 
         rows = form.select("div.GO-Results-Row")
         new_items_count = 0

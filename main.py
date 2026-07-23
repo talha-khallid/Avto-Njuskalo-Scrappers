@@ -5,6 +5,8 @@ import json
 import sqlite3
 import traceback
 import sys
+import os
+import threading
 import builtins
 import random
 from datetime import datetime
@@ -14,6 +16,22 @@ from playwright.async_api import async_playwright
 import avto
 import njuskalo
 import updates
+
+# Force UTF-8 stdout and enable ANSI/VT escapes so the live dashboard renders
+# cleanly instead of turning into mojibake ("�") on Windows consoles.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+if os.name == "nt":
+    # Enables ANSI escape processing (VT mode) in the Windows console.
+    os.system("")
+
+# Single lock guarding ALL writes to stdout. The scrape loops run in the asyncio
+# thread while updates.sync_data() prints from a ThreadPoolExecutor thread — without
+# this they interleave and tear the dashboard line. RLock so DashboardPrint can call
+# update_heartbeat() while already holding it.
+_print_lock = threading.RLock()
 
 DB_FILE = "database.db"
 UPDATE_INTERVAL = 60
@@ -60,27 +78,32 @@ def load_settings():
     except: njus_c = {}
     return avto_c, njus_c
 
+# "\r\033[2K" = carriage-return + ANSI "erase entire line". Clears whatever was
+# there regardless of length, so long status strings never leave trailing garbage.
+CLEAR_LINE = "\r\033[2K"
+
 def update_heartbeat():
     current_time = datetime.now().strftime('%H:%M:%S')
     avto_str = f"Avto: {STATUS_STATE['avto_status']} (C:{STATUS_STATE['avto_cycles']})"
     njus_str = f"Njuskalo: {STATUS_STATE['njus_status']} (C:{STATUS_STATE['njus_cycles']})"
-    sys.stdout.write(f"\r[{current_time}] 🔍 {avto_str} | {njus_str}                   ")
-    sys.stdout.flush()
+    # ASCII-only status line so it can never mojibake on any console.
+    line = f"[{current_time}] {avto_str} | {njus_str}"
+    with _print_lock:
+        sys.stdout.write(CLEAR_LINE + line)
+        sys.stdout.flush()
 
 class DashboardPrint:
     def __init__(self, original_print_func):
         self.orig = original_print_func
-        
+
     def __call__(self, *args, **kwargs):
-        # Clear heartbeat line
-        sys.stdout.write("\r" + " " * 110 + "\r")
-        sys.stdout.flush()
-        
-        # Print normal output
-        self.orig(*args, **kwargs)
-        
-        # Restore heartbeat line
-        update_heartbeat()
+        # Hold the lock across the whole clear+print+redraw so a print from the
+        # background-updates thread can't tear the heartbeat line.
+        with _print_lock:
+            sys.stdout.write(CLEAR_LINE)
+            sys.stdout.flush()
+            self.orig(*args, **kwargs)
+            update_heartbeat()
 
 # Hijack print to keep heartbeat at the bottom
 builtins.print = DashboardPrint(original_print)
@@ -95,20 +118,33 @@ async def avto_loop(page):
             STATUS_STATE["avto_status"] = "fetching"
             update_heartbeat()
             
-            await avto.scrape_routine(page, conn, avto_crit)
+            success, _total, _new = await avto.scrape_routine(page, conn, avto_crit)
             elapsed = time.time() - start_time
-            
+
             STATUS_STATE["avto_cycles"] += 1
-            STATUS_STATE["avto_status"] = f"idle ({elapsed:.1f}s)"
-            update_heartbeat()
-            
-            if STATUS_STATE["avto_cycles"] % 5 == 0:
+
+            # success is False when avto.net returned no usable page (no results
+            # form) — usually rate-limiting/blocking. Back off instead of spinning
+            # through instant empty 0.0s cycles.
+            if not success:
                 gap = random.uniform(5.0, 10.0)
-                STATUS_STATE["avto_status"] = f"cooling ({gap:.1f}s)"
+                STATUS_STATE["avto_status"] = f"no data, backoff {gap:.0f}s"
                 update_heartbeat()
                 await asyncio.sleep(gap)
-            else:
-                await asyncio.sleep(SLEEP_ACTIVE)
+                continue
+
+            STATUS_STATE["avto_status"] = f"idle ({elapsed:.1f}s)"
+            update_heartbeat()
+
+            # Steady, non-bursty polling. The old code fired 5 requests ~0.1s apart
+            # then cooled — that burst is what got avto.net to soft-block us. A single
+            # randomized gap every cycle keeps the same average rate without the spike.
+            gap = random.uniform(4.0, 8.0)
+            STATUS_STATE["avto_status"] = f"cooling ({gap:.1f}s)"
+            update_heartbeat()
+            await asyncio.sleep(gap)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             STATUS_STATE["avto_status"] = f"error"
             update_heartbeat()
@@ -231,7 +267,7 @@ async def main():
             await asyncio.sleep(random.uniform(8.0, 15.0))
         except KeyboardInterrupt:
             # Clear heartbeat line on exit so terminal looks clean
-            original_print("\r" + " " * 110 + "\r", end="")
+            original_print(CLEAR_LINE, end="")
             break
         except Exception as e:
             await asyncio.sleep(5)
