@@ -54,7 +54,7 @@ def _email_worker():
             email_recipients = settings.get("email_recipients", [])
             
             if not email_sender or not email_password or not email_recipients:
-                print("❌ Email settings are incomplete or missing.")
+                print("[mail] Email settings are incomplete or missing.")
                 _email_queue.task_done()
                 continue
             
@@ -65,7 +65,7 @@ def _email_worker():
                     server.starttls()
                     server.login(email_sender, email_password)
                 except Exception as e:
-                    print(f"❌ SMTP Connection/Login failed: {e}")
+                    print(f"[mail] SMTP Connection/Login failed: {e}")
                     server = None
                     _email_queue.task_done()
                     continue
@@ -85,9 +85,9 @@ def _email_worker():
             # Send message
             try:
                 server.send_message(msg)
-                print(f"📧 Email sent successfully: {task.subject}")
+                print(f"[mail] sent: {task.subject}")
             except Exception as e:
-                print(f"❌ Failed to send email via SMTP: {e}")
+                print(f"[mail] FAILED to send via SMTP: {e}")
                 # Reset connection on failure
                 try:
                     server.close()
@@ -98,7 +98,7 @@ def _email_worker():
             _email_queue.task_done()
             
         except Exception as e:
-            print(f"❌ Email worker error: {e}")
+            print(f"[mail] worker error: {e}")
             if server is not None:
                 try:
                     server.close()

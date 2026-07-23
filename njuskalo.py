@@ -50,7 +50,7 @@ async def scrape_routine(page, conn, criteria):
         # Check for Captcha
         title = await page.title()
         if "ShieldSquare" in title or "Captcha" in title or "Pristup odabranim stranicama je onemogućen" in title:
-            print(f"⚠️ Njuskalo BLOCKED: Captcha detected.")
+            print(f"[Njuskalo] BLOCKED: Captcha detected.")
             # Return None (not False) to signal a captcha block specifically.
             # main.py counts these and triggers a full browser relaunch, which is
             # the only thing that reliably clears a ShieldSquare session block.
@@ -65,7 +65,7 @@ async def scrape_routine(page, conn, criteria):
                          soup.select_one('.EntityList-items')
 
         if not main_container:
-            print(f"⚠️ Njuskalo: Could not find main list. Page Title: {title}")
+            print(f"[Njuskalo] Could not find main list. Page Title: {title}")
             return (False, 0, 0)
 
         listings = main_container.select('li')
@@ -99,19 +99,18 @@ async def scrape_routine(page, conn, criteria):
 
             if is_new:
                 new_items_count += 1
+                # Only print matches — "No Match" for every new listing floods the
+                # dashboard (the per-fetch seen/new counts already show total activity).
                 if should_send_email == 1:
-                    status_str = f"📧 Email Sent (Match: {reason})"
+                    print(f"[Njuskalo] MATCH -> EMAIL SENT: {car.get('name')} ({reason})")
                 elif match:
-                    status_str = "⚠️ Email Failed (Matched)"
-                else:
-                    status_str = "❌ No Match"
-                print(f"[Njuskalo] 🚗 {car.get('name')} | {status_str}")
+                    print(f"[Njuskalo] MATCH but email FAILED: {car.get('name')}")
 
         conn.commit()
         return (True, len(listings), new_items_count)
 
     except Exception as e:
-        print(f"⚠️ Njuskalo Error: {e}")
+        print(f"[Njuskalo] Error: {e}")
         return (False, 0, 0)
 
 # --- HELPERS ---
@@ -217,7 +216,7 @@ def parse_car_listing(listing, base_url):
 
         return car_data
     except Exception as e:
-        print(f"⚠️ Njuskalo Error parsing: {e}")
+        print(f"[Njuskalo] Error parsing: {e}")
         return None
 
 def check_car_against_criteria(car, criteria):

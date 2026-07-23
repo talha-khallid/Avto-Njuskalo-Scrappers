@@ -39,12 +39,12 @@ async def scrape_routine(page, conn, criteria):
         if not form:
             page_title = (soup.title.string.strip() if soup.title and soup.title.string else "?")
             if _block_cycles % _BLOCK_WARN_EVERY == 0:
-                print(f"⚠️ Avto: blocked/challenged (page title: {page_title!r}) — a proxy is needed to get past this. Retrying quietly.")
+                print(f"[Avto] BLOCKED/challenged (page title: {page_title!r}) - a proxy is needed to get past this. Retrying quietly.")
             _block_cycles += 1
             return (False, 0, 0)
 
         if _block_cycles:
-            print("✅ Avto: page accessible again, resuming normal scraping.")
+            print("[Avto] page accessible again, resuming normal scraping.")
             _block_cycles = 0
 
         rows = form.select("div.GO-Results-Row")
@@ -78,19 +78,18 @@ async def scrape_routine(page, conn, criteria):
 
             if is_new:
                 new_items_count += 1
+                # Only print matches — "No Match" for every new listing floods the
+                # dashboard (the per-fetch seen/new counts already show total activity).
                 if should_send_email == 1:
-                    status_str = f"📧 Email Sent (Match: {reason})"
+                    print(f"[Avto] MATCH -> EMAIL SENT: {car.get('name')} ({reason})")
                 elif match:
-                    status_str = "⚠️ Email Failed (Matched)"
-                else:
-                    status_str = "❌ No Match"
-                print(f"[Avto] 🚗 {car.get('name')} | {status_str}")
+                    print(f"[Avto] MATCH but email FAILED: {car.get('name')}")
         
         conn.commit()
         return (True, len(rows), new_items_count)
 
     except Exception as e:
-        print(f"⚠️ Avto Scrape Error: {e}")
+        print(f"[Avto] Scrape Error: {e}")
         return (False, 0, 0)
 
 def parse_car_row(row, base_url):

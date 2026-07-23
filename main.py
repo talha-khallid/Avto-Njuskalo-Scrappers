@@ -108,7 +108,7 @@ def load_proxy():
     except FileNotFoundError:
         return None
     except Exception as e:
-        print(f"⚠️ Could not read settings/proxy.json: {e}")
+        print(f"[proxy] Could not read settings/proxy.json: {e}")
         return None
 
     if not cfg.get("enabled", True):
@@ -188,10 +188,19 @@ async def scrape_loop(p, launch_kwargs, name, status_key, cycles_key, scrape_fn)
             STATUS_STATE[status_key] = "fetching"
             update_heartbeat()
 
-            await fetch_site(p, launch_kwargs, scrape_fn, conn, crit)
+            result = await fetch_site(p, launch_kwargs, scrape_fn, conn, crit)
+            took = time.time() - start
+
+            # result = (success, total_seen, new_items). success is None on captcha.
+            success, total, new = result if isinstance(result, tuple) and len(result) == 3 else (False, 0, 0)
 
             STATUS_STATE[cycles_key] += 1
-            STATUS_STATE[status_key] = f"done ({time.time()-start:.1f}s), wait {WAIT_AFTER_FETCH:.0f}s"
+            if success is None:
+                STATUS_STATE[status_key] = f"BLOCKED, retrying (wait {WAIT_AFTER_FETCH:.0f}s)"
+            elif success:
+                STATUS_STATE[status_key] = f"{total} seen, {new} new ({took:.1f}s), wait {WAIT_AFTER_FETCH:.0f}s"
+            else:
+                STATUS_STATE[status_key] = f"no data ({took:.1f}s), wait {WAIT_AFTER_FETCH:.0f}s"
             update_heartbeat()
             await asyncio.sleep(WAIT_AFTER_FETCH)
         except asyncio.CancelledError:
@@ -199,7 +208,7 @@ async def scrape_loop(p, launch_kwargs, name, status_key, cycles_key, scrape_fn)
         except Exception as e:
             STATUS_STATE[status_key] = "error"
             update_heartbeat()
-            print(f"⚠️ {name} loop error: {e}")
+            print(f"[{name}] loop error: {e}")
             await asyncio.sleep(SLEEP_IDLE)
 
 async def background_updates():
@@ -216,9 +225,9 @@ def build_launch_kwargs():
     # Optional proxy (rotating residential recommended). None = direct connection.
     proxy = load_proxy()
     if proxy:
-        print(f"🌐 Proxy enabled: {proxy['server']}")
+        print(f"[proxy] enabled: {proxy['server']}")
     else:
-        print("🌐 No proxy configured (direct connection). Set settings/proxy.json or $SCRAPER_PROXY to enable.")
+        print("[proxy] none (direct connection). Set settings/proxy.json or $SCRAPER_PROXY to enable.")
 
     kwargs = dict(
         headless=True,
@@ -229,10 +238,10 @@ def build_launch_kwargs():
     return kwargs
 
 async def run():
-    print("🚀 Fresh-browser-per-fetch mode: new browser each fetch, closed after (clears cache), 3s wait.")
+    print("[start] Fresh-browser-per-fetch mode: new browser each fetch, closed after (clears cache), 3s wait.")
     launch_kwargs = build_launch_kwargs()
     async with async_playwright() as p:
-        print("✅ Ready. Starting live fetching...")
+        print("[start] Ready. Live fetching Avto + Njuskalo...")
         await asyncio.gather(
             scrape_loop(p, launch_kwargs, "avto", "avto_status", "avto_cycles", avto.scrape_routine),
             scrape_loop(p, launch_kwargs, "njuskalo", "njus_status", "njus_cycles", njuskalo.scrape_routine),

@@ -32,7 +32,7 @@ def sync_data():
     if avto_changed:
         with open(AVTO_FILE, "w", encoding="utf-8") as f:
             json.dump(avto_new, f, indent=4, ensure_ascii=False)
-        print("✅ Avto updated")
+        print("[sync] Avto criteria updated")
     else:
         pass
 
@@ -47,6 +47,6 @@ def sync_data():
     if njuskalo_changed:
         with open(NJUSKALO_FILE, "w", encoding="utf-8") as f:
             json.dump(njuskalo_new, f, indent=4, ensure_ascii=False)
-        print("✅ Njuskalo updated")
+        print("[sync] Njuskalo criteria updated")
     else:
         pass
