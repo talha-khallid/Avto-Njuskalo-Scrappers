@@ -14,10 +14,11 @@ def sync_data():
     try:
         # Fetch data from API
         response = requests.get(API_URL, timeout=10)
-        response.raise_for_status()
+        if response.status_code != 200:
+            return
         api_data = response.json()
-    except Exception as e:
-        print(f"❌ Error fetching API: {e}")
+    except Exception:
+        # Silently keep using local criteria files if remote API is unreachable or returns error
         return
 
     # --- Sync Avto ---

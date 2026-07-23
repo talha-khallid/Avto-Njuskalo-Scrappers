@@ -121,13 +121,9 @@ async def njus_loop(page):
             STATUS_STATE["njus_status"] = f"idle ({elapsed:.1f}s)"
             update_heartbeat()
             
-            if STATUS_STATE["njus_cycles"] % 5 == 0:
-                gap = random.uniform(5.0, 10.0)
-                STATUS_STATE["njus_status"] = f"cooling ({gap:.1f}s)"
-                update_heartbeat()
-                await asyncio.sleep(gap)
-            else:
-                await asyncio.sleep(SLEEP_ACTIVE)
+            # Polling delay: wait 5-8s to avoid triggering ShieldSquare / WAF rate-limiting
+            gap = random.uniform(5.0, 8.0)
+            await asyncio.sleep(gap)
         except Exception as e:
             STATUS_STATE["njus_status"] = f"error"
             update_heartbeat()
@@ -149,9 +145,13 @@ async def run_browser_session():
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--disable-extensions", "--blink-settings=imagesEnabled=false"])
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            locale="hr-HR"
+        )
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
-        await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "stylesheet", "font", "media", "websocket", "manifest"] else route.continue_())
+        # Allow stylesheets & fonts so ShieldSquare bot verification doesn't fail!
+        await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "websocket", "manifest"] else route.continue_())
 
         page_avto = await context.new_page()
         page_njus = await context.new_page()
