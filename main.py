@@ -8,7 +8,6 @@ import sys
 import os
 import threading
 import builtins
-import random
 from datetime import datetime
 from urllib.parse import urlparse, unquote
 from concurrent.futures import ThreadPoolExecutor
@@ -37,18 +36,10 @@ _print_lock = threading.RLock()
 DB_FILE = "database.db"
 UPDATE_INTERVAL = 60
 SLEEP_IDLE = 0.5
-SLEEP_ACTIVE = 0.1
 
-# --- Anti-captcha / session recycling ---
-# How many consecutive captcha blocks before we throw away the browser and
-# relaunch a fresh one (fresh cookies + fresh TLS/HTTP fingerprint).
-CAPTCHA_RESTART_THRESHOLD = 3
-# Hard cap: relaunch the browser every N seconds no matter what, so a session
-# never lives long enough to accumulate bot-detection heat. (0 disables.)
-SESSION_MAX_AGE = 1200  # 20 minutes
-# When blocked, back off this long before retrying (escalates per consecutive block).
-CAPTCHA_BACKOFF_BASE = 20.0
-CAPTCHA_BACKOFF_MAX = 90.0
+# Every fetch launches a brand-new browser and closes it afterwards (which throws
+# away all cookies + cache), then waits this many seconds before the next fetch.
+WAIT_AFTER_FETCH = 3.0
 
 # Global Status State for Heartbeat TUI
 STATUS_STATE = {
@@ -161,95 +152,54 @@ class DashboardPrint:
 # Hijack print to keep heartbeat at the bottom
 builtins.print = DashboardPrint(original_print)
 
-async def avto_loop(page):
+async def fetch_site(p, launch_kwargs, scrape_fn, conn, crit):
+    """
+    Launch a BRAND-NEW browser, do exactly one fetch, then close it. Closing the
+    browser discards all cookies + cache, so the next fetch starts clean.
+    """
+    browser = None
+    try:
+        browser = await p.chromium.launch(**launch_kwargs)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            locale="hr-HR",
+        )
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
+        # Drop images/media/etc. for speed; keep CSS/fonts so WAF checks don't fail.
+        await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "websocket", "manifest"] else route.continue_())
+        page = await context.new_page()
+        return await scrape_fn(page, conn, crit)
+    finally:
+        if browser is not None:
+            try:
+                await browser.close()  # discards this fetch's cookies + cache
+            except Exception:
+                pass
+
+async def scrape_loop(p, launch_kwargs, name, status_key, cycles_key, scrape_fn):
+    """One site: fresh browser -> fetch -> close (clears cache) -> wait 3s -> repeat."""
     conn = init_db()
     while True:
         try:
-            avto_crit, _ = load_settings()
-            start_time = time.time()
-            
-            STATUS_STATE["avto_status"] = "fetching"
-            update_heartbeat()
-            
-            success, _total, _new = await avto.scrape_routine(page, conn, avto_crit)
-            elapsed = time.time() - start_time
+            avto_crit, njus_crit = load_settings()
+            crit = avto_crit if name == "avto" else njus_crit
 
-            STATUS_STATE["avto_cycles"] += 1
-
-            # success is False when avto.net returned no usable page (no results
-            # form) — usually rate-limiting/blocking. Back off instead of spinning
-            # through instant empty 0.0s cycles.
-            if not success:
-                gap = random.uniform(5.0, 10.0)
-                STATUS_STATE["avto_status"] = f"no data, backoff {gap:.0f}s"
-                update_heartbeat()
-                await asyncio.sleep(gap)
-                continue
-
-            STATUS_STATE["avto_status"] = f"idle ({elapsed:.1f}s)"
+            start = time.time()
+            STATUS_STATE[status_key] = "fetching"
             update_heartbeat()
 
-            # Steady, non-bursty polling. The old code fired 5 requests ~0.1s apart
-            # then cooled — that burst is what got avto.net to soft-block us. A single
-            # randomized gap every cycle keeps the same average rate without the spike.
-            gap = random.uniform(4.0, 8.0)
-            STATUS_STATE["avto_status"] = f"cooling ({gap:.1f}s)"
+            await fetch_site(p, launch_kwargs, scrape_fn, conn, crit)
+
+            STATUS_STATE[cycles_key] += 1
+            STATUS_STATE[status_key] = f"done ({time.time()-start:.1f}s), wait {WAIT_AFTER_FETCH:.0f}s"
             update_heartbeat()
-            await asyncio.sleep(gap)
+            await asyncio.sleep(WAIT_AFTER_FETCH)
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            STATUS_STATE["avto_status"] = f"error"
+            STATUS_STATE[status_key] = "error"
             update_heartbeat()
-            print(f"⚠️ Avto Loop Error: {e}")
-            await asyncio.sleep(SLEEP_IDLE)
-
-async def njus_loop(page, restart_event):
-    conn = init_db()
-    consecutive_captchas = 0
-    while True:
-        try:
-            _, njus_crit = load_settings()
-            start_time = time.time()
-
-            STATUS_STATE["njus_status"] = "fetching"
-            update_heartbeat()
-
-            success, _total, _new = await njuskalo.scrape_routine(page, conn, njus_crit)
-            elapsed = time.time() - start_time
-
-            STATUS_STATE["njus_cycles"] += 1
-
-            # success is None specifically when a captcha/ShieldSquare block was hit.
-            if success is None:
-                consecutive_captchas += 1
-
-                if consecutive_captchas >= CAPTCHA_RESTART_THRESHOLD:
-                    print(f"♻️ Njuskalo blocked {consecutive_captchas}x in a row — relaunching browser for a fresh session...")
-                    restart_event.set()
-                    return  # supervisor will tear down and relaunch the browser
-
-                # Escalating backoff so we stop hammering while blocked.
-                backoff = min(CAPTCHA_BACKOFF_BASE * consecutive_captchas, CAPTCHA_BACKOFF_MAX)
-                STATUS_STATE["njus_status"] = f"blocked, backoff {backoff:.0f}s ({consecutive_captchas}/{CAPTCHA_RESTART_THRESHOLD})"
-                update_heartbeat()
-                await asyncio.sleep(backoff)
-                continue
-
-            # Clean cycle — reset the block counter.
-            consecutive_captchas = 0
-            STATUS_STATE["njus_status"] = f"idle ({elapsed:.1f}s)"
-            update_heartbeat()
-
-            # Polling delay: wait 5-8s to avoid triggering ShieldSquare / WAF rate-limiting
-            gap = random.uniform(5.0, 8.0)
-            await asyncio.sleep(gap)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            STATUS_STATE["njus_status"] = f"error"
-            update_heartbeat()
-            print(f"⚠️ Njuskalo Loop Error: {e}")
+            print(f"⚠️ {name} loop error: {e}")
             await asyncio.sleep(SLEEP_IDLE)
 
 async def background_updates():
@@ -259,87 +209,39 @@ async def background_updates():
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(executor, updates.sync_data)
             await asyncio.sleep(UPDATE_INTERVAL)
-        except Exception as e:
+        except Exception:
             await asyncio.sleep(5)
 
-async def session_timer(restart_event):
-    """Force a browser relaunch every SESSION_MAX_AGE seconds."""
-    if not SESSION_MAX_AGE:
-        return
-    await asyncio.sleep(SESSION_MAX_AGE)
-    print(f"♻️ Session reached max age ({SESSION_MAX_AGE}s) — relaunching browser...")
-    restart_event.set()
-
-
-async def run_browser_session():
-    print("🚀 Launching High-Performance Browser...")
-
-    restart_event = asyncio.Event()
-
-    # Route the whole browser through a proxy (rotating residential recommended) so
-    # each relaunched session gets a fresh exit IP — the real fix for IP/region
-    # blocks (Njuskalo ShieldSquare, avto.net Cloudflare). None = direct connection.
+def build_launch_kwargs():
+    # Optional proxy (rotating residential recommended). None = direct connection.
     proxy = load_proxy()
     if proxy:
         print(f"🌐 Proxy enabled: {proxy['server']}")
     else:
         print("🌐 No proxy configured (direct connection). Set settings/proxy.json or $SCRAPER_PROXY to enable.")
 
-    launch_kwargs = dict(
+    kwargs = dict(
         headless=True,
         args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--disable-extensions", "--blink-settings=imagesEnabled=false"],
     )
     if proxy:
-        launch_kwargs["proxy"] = proxy
+        kwargs["proxy"] = proxy
+    return kwargs
 
+async def run():
+    print("🚀 Fresh-browser-per-fetch mode: new browser each fetch, closed after (clears cache), 3s wait.")
+    launch_kwargs = build_launch_kwargs()
     async with async_playwright() as p:
-        browser = await p.chromium.launch(**launch_kwargs)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            locale="hr-HR"
+        print("✅ Ready. Starting live fetching...")
+        await asyncio.gather(
+            scrape_loop(p, launch_kwargs, "avto", "avto_status", "avto_cycles", avto.scrape_routine),
+            scrape_loop(p, launch_kwargs, "njuskalo", "njus_status", "njus_cycles", njuskalo.scrape_routine),
+            background_updates(),
+            return_exceptions=True,
         )
-        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
-        # Allow stylesheets & fonts so ShieldSquare bot verification doesn't fail!
-        await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "websocket", "manifest"] else route.continue_())
-
-        page_avto = await context.new_page()
-        page_njus = await context.new_page()
-
-        print("✅ Browser Ready. Starting Independent Live Fetching...")
-
-        tasks = [
-            asyncio.create_task(avto_loop(page_avto)),
-            asyncio.create_task(njus_loop(page_njus, restart_event)),
-            asyncio.create_task(background_updates()),
-            asyncio.create_task(session_timer(restart_event)),
-        ]
-
-        # Run until something asks for a browser relaunch (repeated captchas or max age).
-        await restart_event.wait()
-
-        # Tear down this session cleanly; main()'s loop will relaunch a fresh one.
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        try:
-            await context.close()
-            await browser.close()
-        except Exception:
-            pass
-
-async def main():
-    while True:
-        try:
-            await run_browser_session()
-            # Brief cooldown between sessions so a fresh browser doesn't immediately
-            # re-hit the site (and possibly re-trip the same block).
-            await asyncio.sleep(random.uniform(8.0, 15.0))
-        except KeyboardInterrupt:
-            # Clear heartbeat line on exit so terminal looks clean
-            original_print(CLEAR_LINE, end="")
-            break
-        except Exception as e:
-            await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        original_print(CLEAR_LINE, end="")
