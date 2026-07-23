@@ -7,21 +7,45 @@ import time
 
 URL = "https://www.avto.net/Ads/results_100.asp?oglasrubrika=1&prodajalec=2"
 
+# Throttle for the "blocked" warning so a Cloudflare challenge doesn't spam the log
+# every single cycle. We warn on the first block and then only once in a while.
+_block_cycles = 0
+_BLOCK_WARN_EVERY = 15
+
 async def scrape_routine(page, conn, criteria):
+    global _block_cycles
     try:
         # CACHE BUSTING: Add timestamp to URL to force fresh data
         current_url = f"{URL}&_t={int(time.time())}"
-        
+
         # Fast load
         await page.goto(current_url, wait_until="domcontentloaded", timeout=20000)
+
+        # Cloudflare "Just a moment..." interstitial: give its JS challenge a few
+        # seconds to auto-solve (it sets a cf_clearance cookie that persists for the
+        # session), then reload once before giving up.
+        title = await page.title()
+        if "just a moment" in title.lower() or "checking your browser" in title.lower():
+            await asyncio.sleep(6)
+            try:
+                await page.reload(wait_until="domcontentloaded", timeout=20000)
+            except:
+                pass
+
         html = await page.content()
         soup = BeautifulSoup(html, "html.parser")
 
         form = soup.find("form", {"id": "results"})
         if not form:
             page_title = (soup.title.string.strip() if soup.title and soup.title.string else "?")
-            print(f"⚠️ Avto: no results form (page title: {page_title!r}) — avto.net likely rate-limiting/blocking.")
+            if _block_cycles % _BLOCK_WARN_EVERY == 0:
+                print(f"⚠️ Avto: blocked/challenged (page title: {page_title!r}) — a proxy is needed to get past this. Retrying quietly.")
+            _block_cycles += 1
             return (False, 0, 0)
+
+        if _block_cycles:
+            print("✅ Avto: page accessible again, resuming normal scraping.")
+            _block_cycles = 0
 
         rows = form.select("div.GO-Results-Row")
         new_items_count = 0

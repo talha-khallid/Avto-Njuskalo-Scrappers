@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy this file to settings/proxy.json and fill in your proxy. A rotating RESIDENTIAL proxy is strongly recommended — datacenter IPs get blocked/challenged just like your own. Each browser relaunch reconnects, so a rotating endpoint hands out a fresh exit IP automatically.",
+  "enabled": true,
+
+  "_option_1_single_url": "Easiest: put the whole thing in 'url' and delete the server/username/password lines.",
+  "url": "http://USERNAME:PASSWORD@proxy.host.com:PORT",
+
+  "_option_2_explicit": "Or set these three and delete 'url'.",
+  "server": "http://proxy.host.com:PORT",
+  "username": "USERNAME",
+  "password": "PASSWORD"
+}

@@ -10,6 +10,7 @@ import threading
 import builtins
 import random
 from datetime import datetime
+from urllib.parse import urlparse, unquote
 from concurrent.futures import ThreadPoolExecutor
 from playwright.async_api import async_playwright
 
@@ -77,6 +78,58 @@ def load_settings():
         with open("settings/njuskalo.json", "r") as f: njus_c = json.load(f).get("car_criteria", {})
     except: njus_c = {}
     return avto_c, njus_c
+
+def _proxy_from_url(raw):
+    """Turn 'http://user:pass@host:port' (or 'host:port') into a Playwright proxy dict."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "http://" + raw
+    parsed = urlparse(raw)
+    if not parsed.hostname:
+        return None
+    server = f"{parsed.scheme}://{parsed.hostname}"
+    if parsed.port:
+        server += f":{parsed.port}"
+    proxy = {"server": server}
+    if parsed.username:
+        proxy["username"] = unquote(parsed.username)
+    if parsed.password:
+        proxy["password"] = unquote(parsed.password)
+    return proxy
+
+def load_proxy():
+    """
+    Load a proxy for the browser, giving each fresh session a rotating exit IP.
+    Precedence:
+      1. env var  SCRAPER_PROXY = "http://user:pass@host:port"
+      2. settings/proxy.json  ({"enabled": true, "url": "..."} OR explicit
+         {"server","username","password"} fields)
+    Returns a Playwright proxy dict, or None if not configured.
+    """
+    raw = os.environ.get("SCRAPER_PROXY", "").strip()
+    if raw:
+        return _proxy_from_url(raw)
+    try:
+        with open("settings/proxy.json", "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        print(f"⚠️ Could not read settings/proxy.json: {e}")
+        return None
+
+    if not cfg.get("enabled", True):
+        return None
+    if cfg.get("url"):
+        return _proxy_from_url(cfg["url"])
+    if cfg.get("server"):
+        proxy = {"server": cfg["server"]}
+        if cfg.get("username"): proxy["username"] = cfg["username"]
+        if cfg.get("password"): proxy["password"] = cfg["password"]
+        return proxy
+    return None
 
 # "\r\033[2K" = carriage-return + ANSI "erase entire line". Clears whatever was
 # there regardless of length, so long status strings never leave trailing garbage.
@@ -223,8 +276,24 @@ async def run_browser_session():
 
     restart_event = asyncio.Event()
 
+    # Route the whole browser through a proxy (rotating residential recommended) so
+    # each relaunched session gets a fresh exit IP — the real fix for IP/region
+    # blocks (Njuskalo ShieldSquare, avto.net Cloudflare). None = direct connection.
+    proxy = load_proxy()
+    if proxy:
+        print(f"🌐 Proxy enabled: {proxy['server']}")
+    else:
+        print("🌐 No proxy configured (direct connection). Set settings/proxy.json or $SCRAPER_PROXY to enable.")
+
+    launch_kwargs = dict(
+        headless=True,
+        args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--disable-extensions", "--blink-settings=imagesEnabled=false"],
+    )
+    if proxy:
+        launch_kwargs["proxy"] = proxy
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage", "--disable-extensions", "--blink-settings=imagesEnabled=false"])
+        browser = await p.chromium.launch(**launch_kwargs)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             locale="hr-HR"
